@@ -736,3 +736,30 @@ def test_lotes_do_modulo_recebem_api_da_base(tmp_path):
     front = [c for c in ags["implementador_frontend"].chamadas if "MODE: MODULE" in c]
     assert all("BASE API" in c and "public class ApiException { ... }" in c for c in back)
     assert all("BASE API" in c and "export const http = 1;" in c for c in front)
+
+
+def test_reparo_deslocamento_em_cadeia():
+    """Padrão da regeneração real (lote 7): cada arquivo com o conteúdo do vizinho."""
+    pkg = "com.distributor.erp.users.api.controller"
+    nomes = ["AuthController", "UserController", "RoleController"]
+    pedidos = [arq(f"{MAIN}/api/controller/{n}.java", "controller", [n]) for n in nomes]
+    g = GeneratedFiles(files=[
+        GeneratedFile(path=pedidos[0].path, content=_java(pkg, "UserController")),
+        GeneratedFile(path=pedidos[1].path, content=_java(pkg, "RoleController")),
+        GeneratedFile(path=pedidos[2].path, content=_java(pkg, "AuthController")),
+    ], notes=[])
+    implementacao.reparar_caminhos(g, pedidos)
+    assert sorted(f.path for f in g.files) == sorted(f.path for f in pedidos)
+    for f in g.files:
+        assert f"class {f.path.rsplit('/', 1)[1][:-5]} " in f.content
+    assert validation.validar_arquivos(g, pedidos, conhecidos()) == []
+
+
+def test_reparo_tipo_repetido_nao_mexe():
+    pkg = "com.distributor.erp.users.service"
+    a = arq(f"{MAIN}/service/A.java", "service", ["A"])
+    b = arq(f"{MAIN}/service/B.java", "service", ["B"])
+    g = GeneratedFiles(files=[GeneratedFile(path=a.path, content=_java(pkg, "B")),
+                              GeneratedFile(path=b.path, content=_java(pkg, "B"))], notes=[])
+    implementacao.reparar_caminhos(g, [a, b])
+    assert [f.path for f in g.files] == [a.path, b.path] and g.notes == []

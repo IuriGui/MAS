@@ -1,9 +1,107 @@
 # Alterações
 
+- [Rodada 5 — Regeneração do módulo e aplicação no ar](#rodada-5--regeneração-do-módulo-e-aplicação-no-ar)
 - [Rodada 4 — Execução completa, compilação do código gerado e correções](#rodada-4--execução-completa-compilação-do-código-gerado-e-correções)
 - [Rodada 3 — Limites contra repetição sem fim e primeira execução real](#rodada-3--limites-contra-repetição-sem-fim-e-primeira-execução-real)
 - [Rodada 2 — Planejador e Implementadores (backend e frontend)](#rodada-2--planejador-e-implementadores-backend-e-frontend)
 - [Rodada 1 — Integração do Arquiteto-chefe e execução por projeto](#rodada-1--integração-do-arquiteto-chefe-e-execução-por-projeto)
+
+---
+
+## Rodada 5 — Regeneração do módulo e aplicação no ar
+
+Data: 08/10/2026.
+
+### Regeneração com as correções da rodada 4
+
+O código do módulo Users foi regenerado com as correções da rodada 4:
+assinaturas da base e dependências que não são mais cortadas. A especificação, o
+plano e a base foram reaproveitados.
+
+```
+SAIDA_DIR=saida/execucoes/20261008 python3 main.py --nome Users \
+    --arquivo exemplos/erp/modulos/users.md --de implementador_backend
+```
+Log: `saida/execucoes/20261008_regeneracao.log`. O código anterior foi guardado em
+`saida/execucoes/20261008/snapshots/`.
+
+| Etapa | Lotes | Tentativas | Tokens (entrada / saída) | Tempo |
+|---|---|---|---|---|
+| Backend do módulo | 8 | 9 | 364 mil / 99 mil | 3.815 s |
+| Frontend do módulo | 3 | 3 | 81 mil / 41 mil | 219 s |
+| **Total** | | | **445 mil / 140 mil ≈ US$ 0,86** | |
+
+- O **backend** levou cerca de 64 minutos, contra 11 na execução anterior. O log
+  não mostra erro de cota nem repetição HTTP, e a causa não foi identificada. A
+  hipótese mais provável é a latência do modelo com contexto ~30% maior.
+- O **lote 7 do backend** veio com deslocamento em cadeia: cada arquivo tinha o
+  conteúdo do vizinho. O reparo da época movia arquivos só para caminhos
+  faltantes e não resolveu; o retry resolveu.
+- **Melhoria posterior** em `reparar_caminhos`: em Java/Kotlin, todo arquivo que
+  declara `P.X` vai para o caminho pedido de `P.X`, mesmo que esteja ocupado. O
+  caminho é função do pacote e do tipo, então a reatribuição é sempre correta;
+  ela não se aplica quando dois arquivos declaram o mesmo tipo. Testado com o
+  padrão em cadeia.
+- O LangSmith falhou ao enviar rastros (erro de certificado SSL). As chamadas
+  ao Gemini não foram afetadas.
+
+### Compilação: antes e depois
+
+| | Rodada 4 | Rodada 5 |
+|---|---|---|
+| Backend, código principal | 14 erros (3 arquivos) | **0 erros** (58 classes) |
+| Backend, testes | (não chegou a compilar) | 7 erros em `UserControllerTest.java` (aridade de construtores de DTO) |
+| Frontend (`tsc`) | 11 erros | 3 erros (1 da base, 2 imports sem uso) |
+
+### Aplicação no ar
+
+A infraestrutura local usa contêineres próprios, sem tocar nos Postgres de
+outros projetos:
+- `sis-erp-postgres`: Postgres 16 na porta 5435;
+- `sis-erp-redis`: Redis 7 na porta 6379.
+
+O backend roda em `java -jar` na porta 8080 e o frontend em `vite` na porta 5173,
+com proxy de `/api` para a 8080.
+
+Verificado, chamando a API:
+- `actuator/health` responde 200;
+- as migrations Flyway são aplicadas na subida;
+- o login devolve um JWT com os papéis;
+- o login inválido é recusado com 401 no formato RFC 7807;
+- rota sem token é recusada com 401;
+- `POST /users` cria o usuário (201), recusa senha curta (400, regra da
+  especificação) e recusa e-mail repetido (409);
+- `GET /users` funciona com busca e com filtro de status;
+- `GET /roles` e `GET /permissions` respondem 200;
+- `npm run build` passa;
+- o login funciona pelo proxy do Vite.
+
+### Correções manuais (não geradas pela pipeline)
+
+Todas estão marcadas com `CORREÇÃO MANUAL` ou `SEED MANUAL` nos arquivos.
+
+| # | Arquivo | Problema | Origem |
+|---|---|---|---|
+| 1 | `db/migration/V900__correcao_manual_colunas_faltantes.sql` (novo) | `outbox_events.status` mapeado na entidade e ausente no SQL da base; `deleted_at` mapeado pela `BaseEntity` para todas as tabelas, mas o modelo só prevê soft delete em `users` e `roles` | incoerência entre a base e o modelo de dados |
+| 2 | `seed_admin_manual.sql` (fora das migrations) | não há administrador inicial, e ninguém consegue entrar | lacuna da especificação |
+| 3 | `UserRepository.java` | `lower(bytea)`: `:search` nulo sem tipo no PostgreSQL | detalhe de Hibernate 6 + PostgreSQL |
+| 4 | `frontend/src/vite-env.d.ts` (novo) | `import.meta.env` sem tipo | plano da base (já corrigido no prompt; a base não foi regenerada) |
+| 5–6 | `routes.tsx`, `UserListPage.tsx` | imports sem uso (TS6133) | modo estrito |
+
+Dois desses erros a pipeline poderia detectar sozinha. Os descompassos entre
+entidades e migrations (nº 1) foram achados gerando o schema esperado pelo
+Hibernate e comparando com o banco. Isso pode virar uma validação na pipeline,
+junto com a compilação.
+
+### Pendências
+
+- `UserControllerTest.java` não compila; para subir a aplicação, o jar foi gerado
+  com `-Dmaven.test.skip=true`.
+- A tela de login exige o campo **tenant**
+  (`018f0000-0000-7000-8000-000000000001`), coerente com o multi-tenant, mas
+  pouco prático com um tenant só.
+- Não há tabela de permissões populada (`GET /permissions` vazio): a
+  especificação não define a lista inicial.
 
 ---
 

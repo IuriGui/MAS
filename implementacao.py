@@ -82,40 +82,55 @@ def _exporta_tudo(conteudo: str, nomes: List[str]) -> bool:
 
 def reparar_caminhos(gerados: GeneratedFiles, pedidos: List[PlannedFile]) -> None:
     """Corrige em código um erro recorrente do modelo: escrever o arquivo X com o
-    `path` de outro arquivo do lote (fica um arquivo duplicado e X faltando).
+    `path` de outro arquivo do lote (um arquivo, ou vários em cadeia).
 
-    Só reatribui quando é inequívoco:
-    - Java/Kotlin: o arquivo declara o tipo P.X e o arquivo pedido que falta é
-      exatamente P.X (mesmo pacote e mesmo nome);
-    - demais (TS/JS...): o arquivo exporta todos os `exports` planejados de
-      exatamente um arquivo que falta, e não os do seu próprio caminho.
+    - Java/Kotlin: o caminho é função do pacote e do tipo declarados, então todo
+      arquivo que declara P.X vai para o caminho pedido de P.X. Não mexe quando
+      dois arquivos declaram o mesmo tipo.
+    - Demais (TS/JS...): o arquivo duplicado ou não pedido é reatribuído quando
+      exporta todos os `exports` planejados de exatamente um arquivo que falta, e
+      não os do seu próprio caminho.
     """
     por_caminho = {f.path: f for f in pedidos}
+    por_fqcn = {layout.fqcn(p): p for p in por_caminho if layout.fqcn(p)}
+
+    # Java/Kotlin: reatribuição global pelo tipo declarado
+    declarados = {}
+    for i, f in enumerate(gerados.files):
+        if f.path.endswith((".java", ".kt")):
+            d = _tipo_declarado(layout.limpar_conteudo(f.content))
+            if d:
+                declarados[i] = f"{d[0]}.{d[1]}"
+    repetidos = {fq for fq in declarados.values() if list(declarados.values()).count(fq) > 1}
+    for i, fq in declarados.items():
+        f = gerados.files[i]
+        novo = por_fqcn.get(fq)
+        if novo and novo != f.path and fq not in repetidos:
+            gerados.notes.append(f"Caminho corrigido automaticamente: {f.path} -> {novo}")
+            print(f"  reparo: {f.path} -> {novo}")
+            f.path = novo
+
+    # Demais: pelos exports planejados
     entregues = [f.path for f in gerados.files]
     faltando = [p for p in por_caminho if p not in entregues]
     for f in gerados.files:
         if not faltando:
             return
-        conteudo = layout.limpar_conteudo(f.content)
-        novo = None
         if f.path.endswith((".java", ".kt")):
-            declarado = _tipo_declarado(conteudo)
-            if declarado:
-                fq = f"{declarado[0]}.{declarado[1]}"
-                if fq != layout.fqcn(f.path):
-                    novo = next((p for p in faltando if layout.fqcn(p) == fq), None)
-        elif entregues.count(f.path) > 1 or f.path not in por_caminho:
+            continue
+        if entregues.count(f.path) > 1 or f.path not in por_caminho:
+            conteudo = layout.limpar_conteudo(f.content)
             proprio = por_caminho.get(f.path)
-            if not (proprio and _exporta_tudo(conteudo, proprio.exports)):
-                candidatos = [p for p in faltando
-                              if _exporta_tudo(conteudo, por_caminho[p].exports)]
-                novo = candidatos[0] if len(candidatos) == 1 else None
-        if novo:
-            faltando.remove(novo)
-            entregues[entregues.index(f.path)] = novo
-            gerados.notes.append(f"Caminho corrigido automaticamente: {f.path} -> {novo}")
-            print(f"  reparo: {f.path} -> {novo}")
-            f.path = novo
+            if proprio and _exporta_tudo(conteudo, proprio.exports):
+                continue
+            candidatos = [p for p in faltando if _exporta_tudo(conteudo, por_caminho[p].exports)]
+            if len(candidatos) == 1:
+                novo = candidatos[0]
+                faltando.remove(novo)
+                entregues[entregues.index(f.path)] = novo
+                gerados.notes.append(f"Caminho corrigido automaticamente: {f.path} -> {novo}")
+                print(f"  reparo: {f.path} -> {novo}")
+                f.path = novo
 
 
 # ------------------------------------------------------------- lotes
