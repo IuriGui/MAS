@@ -1,6 +1,6 @@
 """Execução de um agente com validação em código e nova tentativa."""
 import time
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 from langgraph.errors import GraphRecursionError
 from pydantic import BaseModel
@@ -30,8 +30,12 @@ def executar_agente(
     metricas: dict,
     max_tentativas: int,
     modulo: str = "",
+    normalizar: Optional[Callable[[BaseModel], None]] = None,
 ) -> Tuple[BaseModel, List[str]]:
     """Invoca o agente; se a validação falhar, re-executa com os erros anexados.
+
+    `normalizar` corrige em código, antes de validar, erros mecânicos que não
+    valem uma nova chamada (ex.: caminho trocado entre arquivos de um lote).
 
     Limites (não há repetição sem fim):
     - no máximo `max_tentativas` invocações por etapa;
@@ -64,6 +68,8 @@ def executar_agente(
             print(f"  [{nome_etapa}] tentativa {tentativa}: sem saída estruturada")
         else:
             obj = obj_tentativa
+            if normalizar:
+                normalizar(obj)
             erros = validar(obj) if VALIDAR else []
             if not erros:
                 return obj, []

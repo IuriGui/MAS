@@ -505,3 +505,123 @@ def test_base_reprovada(tmp_path):
     assert m["arquiteto_software"]["tentativas"] == 1
     mb = json.loads((tmp_path / "usuarios/base/metricas.json").read_text())
     assert mb["implementador_backend_base"]["tentativas"] == 2
+
+
+# ================================================================ reparo de caminho
+def test_reparo_saida_real_do_gemini():
+    """Lote 6 da base na 1ª execução real: o Gemini escreveu OutboxPublisher com o
+    path de OutboxProcessorService (duplicado) e deixou OutboxPublisher faltando."""
+    from schemas import ImplementationPlan
+    p = ImplementationPlan.model_validate_json((DADOS / "plano_base_real.json").read_text())
+    lote = implementacao.montar_lotes(p.backend_files)[5]
+    g = GeneratedFiles.model_validate_json((DADOS / "lote_caminho_trocado.json").read_text())
+    k = validation.Conhecidos(caminhos={f.path for f in p.backend_files},
+                              pacote_base="com.distributor.erp.")
+    antes = validation.validar_arquivos(g, lote, k)
+    assert any("não entregues" in e for e in antes)
+
+    implementacao.reparar_caminhos(g, lote)
+    assert validation.validar_arquivos(g, lote, k) == []
+    assert any("OutboxPublisher.java" in n for n in g.notes)
+
+
+def _java(pacote, tipo):
+    return f"package {pacote};\n\npublic class {tipo} {{\n}}\n"
+
+
+def test_reparo_so_quando_inequivoco():
+    a = arq(f"{MAIN}/service/A.java", "service", ["A"])
+    b = arq(f"{MAIN}/service/B.java", "service", ["B"])
+    pkg = "com.distributor.erp.users.service"
+    # B escrito com o path de A: reparado
+    g = GeneratedFiles(files=[GeneratedFile(path=a.path, content=_java(pkg, "A")),
+                              GeneratedFile(path=a.path, content=_java(pkg, "B"))], notes=[])
+    implementacao.reparar_caminhos(g, [a, b])
+    assert [f.path for f in g.files] == [a.path, b.path]
+    # B em outro pacote: não reparado (fica para a validação reprovar)
+    g = GeneratedFiles(files=[GeneratedFile(path=a.path, content=_java(pkg, "A")),
+                              GeneratedFile(path=a.path, content=_java("x.y", "B"))], notes=[])
+    implementacao.reparar_caminhos(g, [a, b])
+    assert [f.path for f in g.files] == [a.path, a.path] and g.notes == []
+    # nada faltando: nada muda
+    g = GeneratedFiles(files=[GeneratedFile(path=a.path, content=_java(pkg, "A")),
+                              GeneratedFile(path=b.path, content=_java(pkg, "B"))], notes=[])
+    implementacao.reparar_caminhos(g, [a, b])
+    assert g.notes == []
+
+
+def test_reparo_no_pipeline_evita_nova_tentativa(tmp_path):
+    def troca(arqs):  # 2º arquivo Java do lote vai com o path do 1º
+        java = [f for f in arqs if f.path.endswith(".java")]
+        java[1].path = java[0].path
+    back = implementador_falso(sabotar=troca, quando=lambda m: "MODE: MODULE" in m)
+    res = processar_modulo("Usuários", "d", agentes=agentes(back=back),
+                           saida_dir=str(tmp_path))
+    m = res["metricas"]["implementador_backend"]
+    assert m["tentativas"] == m["lotes"]  # nenhuma nova chamada ao modelo
+    notas = [n for x in res["arquivos_backend"] for n in x.get("notas", [])]
+    assert any("Caminho corrigido" in n for n in notas)
+
+
+# ================================================================ retomada por arquivo
+def test_retomada_gera_so_o_que_falta(tmp_path):
+    def estraga(arqs):
+        arqs.pop()
+    # lote 2 do módulo falha sempre na 1ª execução
+    ruim = implementador_falso(sabotar=estraga, vezes=99,
+                               quando=lambda m: "MODE: MODULE" in m and "batch 2/2" in m)
+    with pytest.raises(PipelineError):
+        processar_modulo("Usuários", "d", agentes=agentes(back=ruim),
+                         saida_dir=str(tmp_path), max_tentativas=2)
+    pasta = tmp_path / "usuarios"
+    progresso = pasta / "implementador_backend.progresso.json"
+    feitos = [m["path"] for m in json.loads(progresso.read_text()) if "path" in m]
+    assert len(feitos) == 5  # lote 1 (a migration é regenerada em código)
+
+    bom = implementador_falso()
+    res = processar_modulo("Usuários", "d", de="planejador", agentes=agentes(back=bom),
+                           saida_dir=str(tmp_path))
+    # 2ª execução: o planejador refaz o plano (igual), mas só o lote pendente é gerado
+    modulo = [c for c in bom.chamadas if "MODE: MODULE" in c]
+    assert len(modulo) == 1 and "batch 1/1" in modulo[0]
+    pedidos_2 = {f["path"] for f in json.loads(modulo[0].split("(JSON):\n")[-1])}
+    assert pedidos_2 == {f"{MAIN}/api/UserController.java",
+                         f"src/test/java/{PKG}/service/UserServiceTest.java"}
+    assert not progresso.exists()
+    gerados = {m["path"] for m in res["arquivos_backend"] if "path" in m}
+    assert f"{MAIN}/domain/User.java" in gerados and f"{MAIN}/api/UserController.java" in gerados
+
+
+# ================================================================ falsos positivos
+def test_todo_em_portugues_nao_e_placeholder():
+    f = arq(f"{FRONT}pages/UsersPage.tsx", "page", ["UsersPage"])
+    texto = ("export const UsersPage = () => 'Selecione todo o período';\n"
+             "// valida todo o formulário\n")
+    g = GeneratedFiles(files=[GeneratedFile(path=f.path, content=texto)], notes=[])
+    assert validation.validar_arquivos(g, [f], conhecidos()) == []
+    g.files[0].content += "// TODO\n"
+    assert validation.validar_arquivos(g, [f], conhecidos()) != []
+
+
+def test_package_info_nao_exige_tipo():
+    f = arq(f"{MAIN}/domain/package-info.java", "other")
+    g = GeneratedFiles(files=[GeneratedFile(
+        path=f.path, content="package com.distributor.erp.users.domain;\n")], notes=[])
+    assert validation.validar_arquivos(g, [f], conhecidos()) == []
+
+
+# ================================================================ endpoints na base
+def test_base_sem_arquiteturas_nao_checa_urls():
+    f = arq("src/context/AuthContext.tsx", "store", ["AuthProvider"])
+    g = GeneratedFiles(files=[GeneratedFile(
+        path=f.path, content="export const AuthProvider = '/api/v1/auth/login';\n")], notes=[])
+    assert validation.validar_arquivos(g, [f], conhecidos(endpoints=None)) == []
+    assert validation.validar_arquivos(g, [f], conhecidos()) != []
+
+
+def test_base_recebe_endpoints_do_modulo(tmp_path):
+    ags = agentes()
+    processar_modulo("Usuários", "d", agentes=ags, saida_dir=str(tmp_path))
+    base_front = [c for c in ags["implementador_frontend"].chamadas if "MODE: BASE" in c]
+    assert base_front and all("KNOWN API ENDPOINTS" in c and '"/api/v1/users"' in c
+                              for c in base_front)

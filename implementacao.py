@@ -10,8 +10,9 @@
 - A migration do módulo é gerada sem LLM (ddl.py).
 """
 import json
+import re
 from pathlib import Path
-from typing import Callable, Iterable, List, Optional, Set
+from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 import layout
 import validation
@@ -56,6 +57,46 @@ def gravar(raiz: Path, gerados: GeneratedFiles) -> List[str]:
 def _salvar_json(caminho: Path, dados) -> None:
     caminho.parent.mkdir(parents=True, exist_ok=True)
     caminho.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+# ------------------------------------------------------------- reparo
+_TIPO_JVM = re.compile(
+    r"^(?:public\s+|internal\s+)?(?:(?:final|abstract|sealed|open|data|static)\s+)*"
+    r"(?:class|interface|enum|record|object|@interface)\s+([A-Za-z_]\w*)", re.M)
+_PACOTE_JVM = re.compile(r"^\s*package\s+([\w.]+)\s*;?\s*$", re.M)
+
+
+def _tipo_declarado(conteudo: str) -> Optional[Tuple[str, str]]:
+    """(pacote, primeiro tipo de topo) de um arquivo Java/Kotlin."""
+    pacote = _PACOTE_JVM.search(conteudo)
+    tipo = _TIPO_JVM.search(conteudo)
+    return (pacote.group(1), tipo.group(1)) if pacote and tipo else None
+
+
+def reparar_caminhos(gerados: GeneratedFiles, pedidos: List[PlannedFile]) -> None:
+    """Corrige em código um erro recorrente do modelo: escrever a classe X com o
+    `path` de outro arquivo do lote (fica um arquivo duplicado e X faltando).
+
+    Só reatribui quando é inequívoco: o arquivo declara o tipo X no pacote P,
+    seu caminho atual não corresponde a X, e o arquivo pedido que falta é
+    exatamente P.X (mesmo pacote e mesmo nome).
+    """
+    pedidos_fq = {layout.fqcn(f.path): f.path for f in pedidos if layout.fqcn(f.path)}
+    entregues = [f.path for f in gerados.files]
+    faltando = {fq: p for fq, p in pedidos_fq.items() if p not in entregues}
+    for f in gerados.files:
+        if not faltando or not f.path.endswith((".java", ".kt")):
+            continue
+        declarado = _tipo_declarado(layout.limpar_conteudo(f.content))
+        if not declarado:
+            continue
+        fq = f"{declarado[0]}.{declarado[1]}"
+        if fq == layout.fqcn(f.path) or fq not in faltando:
+            continue
+        novo = faltando.pop(fq)
+        gerados.notes.append(f"Caminho corrigido automaticamente: {f.path} -> {novo}")
+        print(f"  reparo: {f.path} -> {novo}")
+        f.path = novo
 
 
 # ------------------------------------------------------------- lotes
@@ -125,6 +166,10 @@ def interfaces_externas(raiz_backend: Path, arq: ModuleArchitecture,
     return "\n\n".join(partes)
 
 
+def arquivo_progresso(pasta: Path, etapa: str) -> Path:
+    return pasta / f"{etapa}.progresso.json"
+
+
 def executar_lotes(
     etapa: str,
     agente,
@@ -137,16 +182,31 @@ def executar_lotes(
     max_tentativas: int,
     modulo: str,
 ) -> List[dict]:
-    """Gera os arquivos lote a lote, validando e gravando cada lote."""
-    lotes = montar_lotes(arquivos)
-    manifesto = []
+    """Gera os arquivos lote a lote, validando e gravando cada lote.
+
+    Retomada: cada lote aprovado é registrado em <etapa>.progresso.json. Numa
+    nova execução, arquivos já registrados (e ainda presentes em disco) não são
+    gerados de novo. Ao terminar a etapa, o arquivo de progresso é apagado.
+    """
+    progresso = arquivo_progresso(pasta, etapa)
+    manifesto: List[dict] = []
+    if progresso.exists():
+        manifesto = json.loads(progresso.read_text(encoding="utf-8"))
+    feitos = {m["path"] for m in manifesto if "path" in m and (raiz / m["path"]).is_file()}
+    pendentes = [f for f in arquivos if f.path not in feitos]
+    if feitos:
+        print(f"  [{etapa}] retomando: {len(feitos)} arquivo(s) já gerado(s), "
+              f"{len(pendentes)} pendente(s)")
+
+    lotes = montar_lotes(pendentes)
     for i, lote in enumerate(lotes, 1):
         print(f"  [{etapa}] lote {i}/{len(lotes)}: {len(lote)} arquivo(s)")
         msg = montar_mensagem(lote, conteudo_dependencias(raiz, lote), i, len(lotes))
         k = conhecidos()
         gerados, erros = executar_agente(
             etapa, agente, msg, lambda g: validation.validar_arquivos(g, lote, k),
-            metricas, max_tentativas, modulo=modulo)
+            metricas, max_tentativas, modulo=modulo,
+            normalizar=lambda g: reparar_caminhos(g, lote))
         if erros:
             invalido = pasta / f"{etapa}.lote{i}.invalido.json"
             invalido.write_text(gerados.model_dump_json(indent=2), encoding="utf-8")
@@ -160,7 +220,9 @@ def executar_lotes(
             manifesto.append({"path": caminho, "lote": i})
         if gerados.notes:
             manifesto.append({"lote": i, "notas": gerados.notes})
-        metricas[etapa]["lotes"] = len(lotes)
+        _salvar_json(progresso, manifesto)
+        metricas[etapa]["lotes"] = metricas[etapa].get("lotes", 0) + 1
+    progresso.unlink(missing_ok=True)
     return manifesto
 
 
@@ -187,10 +249,14 @@ def garantir_base(
     ate_lado: Optional[str],
     max_tentativas: int = MAX_TENTATIVAS,
     metricas: Optional[dict] = None,
+    arquiteturas: Optional[Dict[str, ModuleArchitecture]] = None,
 ) -> ImplementationPlan:
     """Planeja e implementa a base (o que ainda não existir em `pasta`).
 
     `ate_lado`: None = só planejar; "backend" ou "frontend" = implementar até ele.
+    `arquiteturas`: arquiteturas de módulo já conhecidas. Seus endpoints vão na
+    mensagem (ex.: login) e na validação; sem nenhuma, a base não tem as URLs
+    da API checadas.
     Artefatos: <pasta>/5_plano.json, 6_backend.json, 7_frontend.json.
     """
     pasta.mkdir(parents=True, exist_ok=True)
@@ -223,15 +289,20 @@ def garantir_base(
         return plano
     try:
         _implementar_base(contexto, modulos, pasta, codigo_dir, agentes, ate_lado,
-                          max_tentativas, metricas, plano, rotas, front)
+                          max_tentativas, metricas, plano, rotas, front,
+                          arquiteturas or {})
     finally:
         _salvar_json(pasta / "metricas.json", metricas)  # mesmo se falhar
     return plano
 
 
 def _implementar_base(contexto, modulos, pasta, codigo_dir, agentes, ate_lado,
-                      max_tentativas, metricas, plano, rotas, front) -> None:
+                      max_tentativas, metricas, plano, rotas, front,
+                      arquiteturas: Dict[str, ModuleArchitecture]) -> None:
     lados = LADOS[: LADOS.index(ate_lado) + 1]
+    endpoints = [e for a in arquiteturas.values() for e in a.endpoints]
+    conhecidos_api = ({validation.normalizar_rota(e.path) for e in endpoints}
+                      if endpoints else None)
     for lado in lados:
         manifesto_arq = pasta / f"{6 + LADOS.index(lado)}_{lado}.json"
         arquivos = getattr(plano, f"{lado}_files")
@@ -242,9 +313,10 @@ def _implementar_base(contexto, modulos, pasta, codigo_dir, agentes, ate_lado,
         manifesto = executar_lotes(
             f"implementador_{lado}_base", agentes[f"implementador_{lado}"], arquivos, raiz,
             lambda lote, deps, i, n, lado=lado: templates.msg_implementador_base(
-                lado, modulos, rotas, plano, deps, lote, i, n),
+                lado, modulos, rotas, plano, deps, lote, i, n, endpoints),
             lambda raiz=raiz, lado=lado: _conhecidos(
-                raiz, [plano], lado, contexto, rotas_modulos=set(rotas)),
+                raiz, [plano], lado, contexto, rotas_modulos=set(rotas),
+                endpoints=conhecidos_api),
             pasta, metricas, max_tentativas, "base")
         _salvar_json(manifesto_arq, manifesto)
 

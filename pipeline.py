@@ -224,9 +224,10 @@ def _etapas_de_implementacao(nome, contexto, artefatos, agentes, pasta, codigo,
                              max_tentativas) -> dict:
     # Base compartilhada (esqueleto) — só quando há implementação a fazer
     if any(roda(e) for e in ETAPAS[4:]) and plano_base is None:
+        arq = artefatos.get("arquitetura")
         plano_base = implementacao.garantir_base(
             contexto, [nome], pasta / "base", codigo, agentes, lado_final(ate),
-            max_tentativas)
+            max_tentativas, arquiteturas={nome: arq} if arq else None)
 
     # 5) Planejador ------------------------------------------------------
     if roda("planejador"):

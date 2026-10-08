@@ -245,13 +245,20 @@ def msg_implementador_base(
     lote: List[PlannedFile],
     i: int,
     n: int,
+    endpoints: Optional[list] = None,
 ) -> str:
     arquivos = plano_base.backend_files if lado == "backend" else plano_base.frontend_files
+    api = ("\n\nKNOWN API ENDPOINTS of the modules (use these exact paths, e.g. for "
+           "login and token refresh; do not invent others):\n"
+           + json.dumps([{"method": e.method, "path": e.path, "purpose": e.purpose,
+                          "request": e.request_summary, "response": e.response_summary}
+                         for e in endpoints], indent=2, ensure_ascii=False)
+           if endpoints else "")
     extra = ("\nModule routes files the router imports (they will exist; import "
              "them without extension):\n" + "\n".join(f"- {r}" for r in rotas)
              if lado == "frontend" else "")
     return (
-        f"MODE: BASE — batch {i}/{n}\n\nMODULES: {', '.join(modulos)}{extra}\n\n"
+        f"MODE: BASE — batch {i}/{n}\n\nMODULES: {', '.join(modulos)}{extra}{api}\n\n"
         "Conventions:\n" + "\n".join(f"- {c}" for c in plano_base.conventions)
         + f"\n\nBASE PLAN — {lado} files (JSON):\n{_arquivos(arquivos)}\n\n"
         f"CONTENT OF FILES THIS BATCH DEPENDS ON:\n{dependencias or NO_FILES}\n\n"

@@ -146,17 +146,19 @@ def processar_projeto(
 
     codigo = pasta / "codigo"
     plano_base = None
+    arquiteturas: Dict[str, object] = _arquiteturas_existentes(pasta, contexto)
     implementa = ETAPAS.index(ate) >= ETAPAS.index("planejador")
     if implementa:
         agentes_base = fabrica_agentes(contexto) if fabrica_agentes else None
         if agentes_base is None:
             from pipeline import criar_agentes
             agentes_base = criar_agentes(contexto)
+        # Endpoints de execuções anteriores (se houver) ajudam a base (ex.: login)
         plano_base = implementacao.garantir_base(
             contexto, list(contexto.build_order), pasta / "base", codigo,
-            agentes_base, lado_final(ate), max_tentativas)
+            agentes_base, lado_final(ate), max_tentativas,
+            arquiteturas=arquiteturas or None)
 
-    arquiteturas: Dict[str, object] = _arquiteturas_existentes(pasta, contexto)
     status: Dict[str, dict] = {}
     for numero, nome in enumerate(contexto.build_order, 1):
         if filtro and nome.strip().lower() not in filtro:

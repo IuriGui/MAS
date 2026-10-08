@@ -589,7 +589,7 @@ class Conhecidos:
     caminhos: Set[str] = field(default_factory=set)       # arquivos do mesmo lado
     pacote_base: str = ""                                  # ex.: com.distributor.erp.
     tabelas: Optional[Set[str]] = None                     # None = não checa @Table
-    endpoints: Set[str] = field(default_factory=set)       # "/api/v1/users/{}"
+    endpoints: Optional[Set[str]] = field(default_factory=set)  # "/api/v1/users/{}"; None = não checa
     rotas_modulos: Set[str] = field(default_factory=set)   # src/modules/x/routes
 
     @property
@@ -597,10 +597,12 @@ class Conhecidos:
         return {c for c in (layout.fqcn(p) for p in self.caminhos) if c}
 
 
+# TODO/FIXME só em maiúsculas: "todo" é palavra comum em português (textos de tela)
 _PLACEHOLDER = re.compile(
     r"\bTODO\b|\bFIXME\b|^\s*(//|#|\*|<!--)\s*\.\.\.|"
-    r"(your|seu|sua) (code|código|implementation|implementação) (here|aqui)",
-    re.I | re.M)
+    r"(?i:(your|seu|sua) (code|código|implementation|implementação) (here|aqui))",
+    re.M)
+_SEM_TIPO = ("package-info", "module-info")
 _PACKAGE = re.compile(r"^\s*package\s+([\w.]+)\s*;?\s*$", re.M)
 _IMPORT_JVM = re.compile(r"^\s*import\s+(static\s+)?([\w.]+(?:\.\*)?)\s*;?\s*$", re.M)
 _TABLE = re.compile(r"@Table\s*\(\s*name\s*=\s*\"([^\"]+)\"")
@@ -628,8 +630,8 @@ def _checar_jvm(caminho: str, texto: str, k: Conhecidos) -> List[str]:
         if not m or m.group(1) != pacote_esperado:
             erros.append(f"'{caminho}': declare 'package {pacote_esperado};' "
                          "(o pacote deve corresponder à pasta).")
-        if not re.search(rf"\b(class|interface|enum|record|object)\s+{re.escape(nome)}\b",
-                         texto):
+        if nome not in _SEM_TIPO and not re.search(
+                rf"\b(class|interface|enum|record|object)\s+{re.escape(nome)}\b", texto):
             erros.append(f"'{caminho}': o tipo principal deve se chamar '{nome}'.")
     classes = k.classes
     pacotes = {c.rpartition(".")[0] for c in classes}
@@ -661,7 +663,7 @@ def _resolve(origem: str, especificador: str, k: Conhecidos) -> bool:
         alvo = posixpath.normpath(posixpath.join(posixpath.dirname(origem), especificador))
     else:
         return True  # pacote npm: não checado aqui
-    extensoes = layout.EXTENSOES_FRONTEND + (".css", ".scss", ".json")
+    extensoes = layout.EXTENSOES_FRONTEND + (".d.ts", ".css", ".scss", ".json")
     candidatos = ({alvo} | {alvo + e for e in extensoes}
                   | {f"{alvo}/index{e}" for e in layout.EXTENSOES_FRONTEND})
     if candidatos & k.caminhos:
@@ -675,7 +677,7 @@ def _checar_front(caminho: str, texto: str, k: Conhecidos) -> List[str]:
         esp = next((g for g in grupos if g), None)
         if esp and not _resolve(caminho, esp, k):
             erros.append(f"'{caminho}' importa '{esp}', que não existe no plano nem na base.")
-    for url in _URL_API.findall(texto):
+    for url in (_URL_API.findall(texto) if k.endpoints is not None else []):
         rota = normalizar_rota(url)
         if _SO_PREFIXO.match(rota):
             continue

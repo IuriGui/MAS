@@ -1,0 +1,644 @@
+{
+  "module_name": "BASE",
+  "backend_files": [
+    {
+      "path": "pom.xml",
+      "kind": "build",
+      "purpose": "Maven project configuration declaring Spring Boot 3, Java 21, dependencies (PostgreSQL, Redis, Security, JWT, Flyway, JPA, Validation, Micrometer), and build plugins.",
+      "exports": [
+        "pom.xml"
+      ],
+      "depends_on": [],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/resources/application.yml",
+      "kind": "config",
+      "purpose": "Application configuration declaring database connection, JPA/Hibernate multi-tenancy settings, Flyway, Redis, JWT secrets, and logging MDC formatting.",
+      "exports": [
+        "application.yml"
+      ],
+      "depends_on": [],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/resources/db/migration/V0__init_outbox.sql",
+      "kind": "config",
+      "purpose": "Database migration for transactional outbox table supporting reliable inter-module domain event publication.",
+      "exports": [
+        "V0__init_outbox.sql"
+      ],
+      "depends_on": [],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/persistence/UuidV7Generator.java",
+      "kind": "other",
+      "purpose": "Utility class providing generation of time-ordered UUID version 7 identifiers for all entities and correlation tracking.",
+      "exports": [
+        "UuidV7Generator"
+      ],
+      "depends_on": [],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/persistence/BaseEntity.java",
+      "kind": "entity",
+      "purpose": "MappedSuperclass defining UUIDv7 primary key, tenant_id discriminator, creation timestamp, and soft delete timestamp.",
+      "exports": [
+        "BaseEntity"
+      ],
+      "depends_on": [
+        "src/main/java/com/distributor/erp/common/persistence/UuidV7Generator.java"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/persistence/BaseAuditableEntity.java",
+      "kind": "entity",
+      "purpose": "MappedSuperclass extending BaseEntity to add created_by, updated_at, and updated_by audit fields.",
+      "exports": [
+        "BaseAuditableEntity"
+      ],
+      "depends_on": [
+        "src/main/java/com/distributor/erp/common/persistence/BaseEntity.java"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/tenant/TenantContext.java",
+      "kind": "security",
+      "purpose": "ThreadLocal holder storing the active tenant identifier extracted from the request token.",
+      "exports": [
+        "TenantContext"
+      ],
+      "depends_on": [],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/tenant/TenantFilter.java",
+      "kind": "security",
+      "purpose": "Servlet filter extracting X-Tenant-ID header or JWT tenant claim to populate TenantContext.",
+      "exports": [
+        "TenantFilter"
+      ],
+      "depends_on": [
+        "src/main/java/com/distributor/erp/common/tenant/TenantContext.java"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/logging/CorrelationIdFilter.java",
+      "kind": "other",
+      "purpose": "Servlet filter ensuring every incoming HTTP request receives an MDC correlation ID for distributed structured logging.",
+      "exports": [
+        "CorrelationIdFilter",
+        "MdcConstants"
+      ],
+      "depends_on": [],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/error/BusinessException.java",
+      "kind": "exception",
+      "purpose": "Base unchecked exception for domain logic violations with error code and parameters.",
+      "exports": [
+        "BusinessException"
+      ],
+      "depends_on": [],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/error/ResourceNotFoundException.java",
+      "kind": "exception",
+      "purpose": "Exception thrown when an entity is not found within the active tenant scope (HTTP 404).",
+      "exports": [
+        "ResourceNotFoundException"
+      ],
+      "depends_on": [
+        "src/main/java/com/distributor/erp/common/error/BusinessException.java"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/error/UnauthorizedException.java",
+      "kind": "exception",
+      "purpose": "Exception thrown when authentication credentials or token are invalid or missing (HTTP 401).",
+      "exports": [
+        "UnauthorizedException"
+      ],
+      "depends_on": [
+        "src/main/java/com/distributor/erp/common/error/BusinessException.java"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/error/ForbiddenException.java",
+      "kind": "exception",
+      "purpose": "Exception thrown when authenticated user lacks the required permission or role (HTTP 403).",
+      "exports": [
+        "ForbiddenException"
+      ],
+      "depends_on": [
+        "src/main/java/com/distributor/erp/common/error/BusinessException.java"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/error/ConflictException.java",
+      "kind": "exception",
+      "purpose": "Exception thrown when an operation conflicts with current state (HTTP 409).",
+      "exports": [
+        "ConflictException"
+      ],
+      "depends_on": [
+        "src/main/java/com/distributor/erp/common/error/BusinessException.java"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/error/ProblemDetails.java",
+      "kind": "dto",
+      "purpose": "Standard RFC 7807 Problem Details representation for structured API error responses.",
+      "exports": [
+        "ProblemDetails"
+      ],
+      "depends_on": [],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/error/GlobalExceptionHandler.java",
+      "kind": "other",
+      "purpose": "Controller advice translating business, validation, and security exceptions to RFC 7807 Problem Details.",
+      "exports": [
+        "GlobalExceptionHandler"
+      ],
+      "depends_on": [
+        "src/main/java/com/distributor/erp/common/error/BusinessException.java",
+        "src/main/java/com/distributor/erp/common/error/ResourceNotFoundException.java",
+        "src/main/java/com/distributor/erp/common/error/UnauthorizedException.java",
+        "src/main/java/com/distributor/erp/common/error/ForbiddenException.java",
+        "src/main/java/com/distributor/erp/common/error/ConflictException.java",
+        "src/main/java/com/distributor/erp/common/error/ProblemDetails.java"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/security/UserPrincipal.java",
+      "kind": "security",
+      "purpose": "UserDetails implementation holding user ID, tenant ID, username, and granted authorities.",
+      "exports": [
+        "UserPrincipal"
+      ],
+      "depends_on": [],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/security/JwtTokenProvider.java",
+      "kind": "security",
+      "purpose": "Service responsible for generating, validating, and extracting claims from stateless JWT bearer tokens.",
+      "exports": [
+        "JwtTokenProvider"
+      ],
+      "depends_on": [
+        "src/main/java/com/distributor/erp/common/security/UserPrincipal.java"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/security/JwtAuthenticationFilter.java",
+      "kind": "security",
+      "purpose": "Per-request security filter validating Bearer JWT tokens and loading SecurityContext and TenantContext.",
+      "exports": [
+        "JwtAuthenticationFilter"
+      ],
+      "depends_on": [
+        "src/main/java/com/distributor/erp/common/security/JwtTokenProvider.java",
+        "src/main/java/com/distributor/erp/common/tenant/TenantContext.java"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/security/CurrentUserContext.java",
+      "kind": "security",
+      "purpose": "Helper utility to retrieve the current authenticated UserPrincipal and user ID from SecurityContextHolder.",
+      "exports": [
+        "CurrentUserContext"
+      ],
+      "depends_on": [
+        "src/main/java/com/distributor/erp/common/security/UserPrincipal.java"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/security/SecurityConfig.java",
+      "kind": "security",
+      "purpose": "Spring Security 6 configuration enabling stateless sessions, CSRF disable, CORS, filter chain, and method security.",
+      "exports": [
+        "SecurityConfig"
+      ],
+      "depends_on": [
+        "src/main/java/com/distributor/erp/common/security/JwtAuthenticationFilter.java",
+        "src/main/java/com/distributor/erp/common/tenant/TenantFilter.java",
+        "src/main/java/com/distributor/erp/common/logging/CorrelationIdFilter.java"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/pagination/PageRequestDto.java",
+      "kind": "dto",
+      "purpose": "Standard query parameter DTO for page number, page size, sort field, and direction.",
+      "exports": [
+        "PageRequestDto"
+      ],
+      "depends_on": [],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/pagination/PageResponseDto.java",
+      "kind": "dto",
+      "purpose": "Generic paginated payload envelope containing content items, pagination metadata, and total elements.",
+      "exports": [
+        "PageResponseDto"
+      ],
+      "depends_on": [],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/outbox/OutboxEntity.java",
+      "kind": "entity",
+      "purpose": "Entity representing a record in the transactional outbox table for reliable event dispatch.",
+      "exports": [
+        "OutboxEntity"
+      ],
+      "depends_on": [
+        "src/main/java/com/distributor/erp/common/persistence/UuidV7Generator.java"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/outbox/OutboxRepository.java",
+      "kind": "repository",
+      "purpose": "Spring Data JPA repository to query pending outbox records and mark processed events.",
+      "exports": [
+        "OutboxRepository"
+      ],
+      "depends_on": [
+        "src/main/java/com/distributor/erp/common/outbox/OutboxEntity.java"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/outbox/OutboxPublisher.java",
+      "kind": "service",
+      "purpose": "Service method invoked within domain transactions to persist outbox records for eventual publication.",
+      "exports": [
+        "OutboxPublisher"
+      ],
+      "depends_on": [
+        "src/main/java/com/distributor/erp/common/outbox/OutboxEntity.java",
+        "src/main/java/com/distributor/erp/common/outbox/OutboxRepository.java"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/common/outbox/OutboxProcessorService.java",
+      "kind": "service",
+      "purpose": "Scheduled worker processing pending outbox entries and publishing them via Spring ApplicationEventPublisher.",
+      "exports": [
+        "OutboxProcessorService"
+      ],
+      "depends_on": [
+        "src/main/java/com/distributor/erp/common/outbox/OutboxRepository.java"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main/java/com/distributor/erp/ErpApplication.java",
+      "kind": "entrypoint",
+      "purpose": "Spring Boot main application class bootstrapping the modular monolith.",
+      "exports": [
+        "ErpApplication"
+      ],
+      "depends_on": [
+        "src/main/java/com/distributor/erp/common/security/SecurityConfig.java"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    }
+  ],
+  "frontend_files": [
+    {
+      "path": "package.json",
+      "kind": "build",
+      "purpose": "Node.js package manifest defining React 18, React Router v6, Axios, TypeScript, and Tailwind CSS dependencies.",
+      "exports": [
+        "package.json"
+      ],
+      "depends_on": [],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "tsconfig.json",
+      "kind": "config",
+      "purpose": "TypeScript compiler configuration with strict mode and path alias mappings.",
+      "exports": [
+        "tsconfig.json"
+      ],
+      "depends_on": [],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "vite.config.ts",
+      "kind": "config",
+      "purpose": "Vite build tool configuration specifying React plugin and local development server proxy to backend.",
+      "exports": [
+        "vite.config.ts"
+      ],
+      "depends_on": [],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "index.html",
+      "kind": "entrypoint",
+      "purpose": "HTML5 entry point providing root DOM node for the single-page application.",
+      "exports": [
+        "index.html"
+      ],
+      "depends_on": [],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/index.css",
+      "kind": "style",
+      "purpose": "Base global styling and Tailwind CSS directive imports.",
+      "exports": [
+        "index.css"
+      ],
+      "depends_on": [],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/types/index.ts",
+      "kind": "types",
+      "purpose": "Core TypeScript type definitions for user session, pagination, and RFC 7807 problem details.",
+      "exports": [
+        "UserDto",
+        "TenantContextState",
+        "ApiErrorResponse",
+        "PaginatedResponse"
+      ],
+      "depends_on": [],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/api/client.ts",
+      "kind": "api_client",
+      "purpose": "Axios HTTP client instance configured with base URL, JWT token injection, tenant header interceptor, and 401 error handler.",
+      "exports": [
+        "apiClient"
+      ],
+      "depends_on": [
+        "src/types/index.ts"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/context/AuthContext.tsx",
+      "kind": "store",
+      "purpose": "React context and provider managing user authentication state, token storage, and logout actions.",
+      "exports": [
+        "AuthContext",
+        "AuthProvider",
+        "useAuth"
+      ],
+      "depends_on": [
+        "src/types/index.ts",
+        "src/api/client.ts"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/context/TenantContext.tsx",
+      "kind": "store",
+      "purpose": "React context managing the current active tenant identifier for multi-tenant sessions.",
+      "exports": [
+        "TenantContext",
+        "TenantProvider",
+        "useTenant"
+      ],
+      "depends_on": [
+        "src/types/index.ts"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/components/ProtectedRoute.tsx",
+      "kind": "component",
+      "purpose": "Route wrapper component ensuring user is authenticated and possesses required roles before rendering child views.",
+      "exports": [
+        "ProtectedRoute"
+      ],
+      "depends_on": [
+        "src/context/AuthContext.tsx"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/components/ErrorAlert.tsx",
+      "kind": "component",
+      "purpose": "Reusable UI alert banner component rendering RFC 7807 problem details and API error messages.",
+      "exports": [
+        "ErrorAlert"
+      ],
+      "depends_on": [
+        "src/types/index.ts"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/layouts/Header.tsx",
+      "kind": "component",
+      "purpose": "Navigation top header displaying current user profile, tenant badge, and logout trigger.",
+      "exports": [
+        "Header"
+      ],
+      "depends_on": [
+        "src/context/AuthContext.tsx"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/layouts/Sidebar.tsx",
+      "kind": "component",
+      "purpose": "Collapsible navigation sidebar containing navigation links dynamically filtered by user roles.",
+      "exports": [
+        "Sidebar"
+      ],
+      "depends_on": [
+        "src/context/AuthContext.tsx"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/layouts/AppShell.tsx",
+      "kind": "component",
+      "purpose": "Primary layout frame embedding Sidebar, Header, and <Outlet /> for module views.",
+      "exports": [
+        "AppShell"
+      ],
+      "depends_on": [
+        "src/layouts/Header.tsx",
+        "src/layouts/Sidebar.tsx"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/routes/AppRouter.tsx",
+      "kind": "routes",
+      "purpose": "Main React Router setup combining AppShell, public login redirects, and dynamically importing module routes including usersRoutes.",
+      "exports": [
+        "AppRouter"
+      ],
+      "depends_on": [
+        "src/layouts/AppShell.tsx",
+        "src/components/ProtectedRoute.tsx"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/App.tsx",
+      "kind": "entrypoint",
+      "purpose": "Root React application component configuring providers (AuthProvider, TenantProvider) and AppRouter.",
+      "exports": [
+        "App"
+      ],
+      "depends_on": [
+        "src/context/AuthContext.tsx",
+        "src/context/TenantContext.tsx",
+        "src/routes/AppRouter.tsx"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    },
+    {
+      "path": "src/main.tsx",
+      "kind": "entrypoint",
+      "purpose": "Vite entry file rendering <App /> into the root DOM node.",
+      "exports": [
+        "renderApp"
+      ],
+      "depends_on": [
+        "src/App.tsx",
+        "src/index.css"
+      ],
+      "tables": [],
+      "endpoints": [],
+      "requirements": []
+    }
+  ],
+  "screens": [],
+  "conventions": [
+    "All module entities MUST extend BaseEntity or BaseAuditableEntity from com.distributor.erp.common.persistence.",
+    "All entity primary keys and foreign keys MUST be java.util.UUID generated using UuidV7Generator.",
+    "All tenant-scoped queries MUST obtain the active tenant through TenantContext.getTenantId() or rely on the Hibernate tenant filter.",
+    "All business exceptions MUST extend BusinessException or use standard subclasses (ResourceNotFoundException, ConflictException, ForbiddenException, UnauthorizedException) and never throw raw RuntimeExceptions directly to clients.",
+    "All controllers MUST expose endpoints under /api/v1/... and return RFC 7807 ProblemDetails on errors via GlobalExceptionHandler.",
+    "All inter-module state change notifications MUST be published via OutboxPublisher.publish(eventType, aggregateId, payload) inside the business transaction.",
+    "All paginated GET endpoints MUST accept PageRequestDto and return PageResponseDto<T>.",
+    "All frontend module route files MUST export an array of RouteObject as default export or named export usersRoutes.",
+    "All frontend API calls MUST use the shared apiClient from src/api/client.ts which attaches the Bearer token and tenant context."
+  ],
+  "implementation_notes": [
+    "The shared database uses a tenant_id discriminator column on all business tables. In the BASE plan, BaseEntity provides the tenant_id field and soft-delete deleted_at column.",
+    "Inter-module communication is asynchronous and reliable using a PostgreSQL Transactional Outbox table initialized via V0__init_outbox.sql and serviced by OutboxPublisher and OutboxProcessorService.",
+    "RFC 7807 Problem Details error formatting is handled universally by GlobalExceptionHandler in com.distributor.erp.common.error.",
+    "The frontend AppRouter explicitly imports usersRoutes from src/modules/users/routes.tsx which will be defined in the Users module."
+  ]
+}
