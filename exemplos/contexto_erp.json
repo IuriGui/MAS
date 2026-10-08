@@ -1,0 +1,326 @@
+{
+  "context_version": "1.0.0",
+  "architectural_style": "modular_monolith",
+  "tech_stack": {
+    "language": {
+      "name": "Java",
+      "version": "21",
+      "verify_version": false,
+      "justification": "Provides long-term support, high performance, and strong typing suitable for complex business logic."
+    },
+    "framework": {
+      "name": "Spring Boot",
+      "version": "3",
+      "verify_version": false,
+      "justification": "Matches the preferred stack constraint and offers mature modular enterprise capabilities."
+    },
+    "database": {
+      "name": "PostgreSQL",
+      "version": "16",
+      "verify_version": false,
+      "justification": "Delivers ACID compliance, native JSON support, and robust Row-Level Security for future multi-tenancy."
+    },
+    "cache": {
+      "name": "Redis",
+      "version": "7",
+      "verify_version": false,
+      "justification": "Handles user sessions, distributed rate limiting, and frequently read catalog caches efficiently."
+    },
+    "message_broker": {
+      "name": "None",
+      "version": "0",
+      "verify_version": false,
+      "justification": "An external message broker is omitted to avoid unnecessary operational overhead for 200 concurrent users."
+    },
+    "authentication_mechanism": {
+      "name": "Spring Security with JWT",
+      "version": "6",
+      "verify_version": false,
+      "justification": "Provides stateless bearer token authentication compatible with web clients and future multi-tenant SaaS needs."
+    },
+    "frontend": {
+      "name": "React",
+      "version": "18",
+      "verify_version": false,
+      "justification": "Provides a robust component ecosystem suitable for complex ERP data grids on desktop and tablet browsers."
+    }
+  },
+  "cross_cutting_decisions": {
+    "multi_tenancy": {
+      "enabled": true,
+      "strategy": "shared_database_discriminator",
+      "details": "All tenant-scoped tables include a mandatory tenant_id column enforced via Hibernate filters and PostgreSQL Row-Level Security."
+    },
+    "authentication_and_authorization": {
+      "token_type": "JWT (Stateless Bearer)",
+      "rbac_enforcement": "Controller and service layers via Spring Security method annotations evaluated against claims in the token."
+    },
+    "error_format_and_status_codes": {
+      "format": "RFC 7807 Problem Details",
+      "status_code_conventions": "Standard HTTP semantics (400 Bad Request, 401 Unauthorized, 403 Forbidden, 404 Not Found, 409 Conflict, 422 Unprocessable Entity, 500 Internal Error)."
+    },
+    "logging_audit_and_observability": {
+      "logging": "Structured JSON logging via Logback with correlation IDs propagated through MDC.",
+      "audit": "Synchronous recording of critical mutations and sensitive data access to a dedicated audit store.",
+      "observability": "Micrometer exporting Prometheus metrics and OpenTelemetry traces."
+    },
+    "configuration_and_secrets": {
+      "strategy": "Environment variables managed externally via AWS Systems Manager Parameter Store and AWS Secrets Manager."
+    },
+    "data_conventions": {
+      "id_type": "UUIDv7",
+      "timestamps_and_timezone": "UTC stored as TIMESTAMP WITH TIME ZONE and serialized as ISO 8601 strings.",
+      "soft_delete": "Supported via deleted_at timestamp column on transactional records; excluded from unique constraints.",
+      "money_and_decimals": "DECIMAL(19, 4) for monetary amounts and quantities to eliminate floating-point rounding errors."
+    },
+    "api_conventions": {
+      "style": "RESTful JSON over HTTPS",
+      "versioning": "URI path versioning starting at /api/v1",
+      "pagination": "Keyset pagination for unbounded queries and offset-limit for bounded UI data tables."
+    }
+  },
+  "naming_conventions": {
+    "tables": "snake_case_plural",
+    "columns": "snake_case_singular",
+    "endpoints": "kebab-case-plural-nouns",
+    "events": "PascalCasePastTense",
+    "packages": "com.distributor.erp.<module_name>"
+  },
+  "inter_module_communication": {
+    "direct_call": {
+      "allowed": true,
+      "when_to_use": "Synchronous query and read-only lookups across module boundary interfaces within the same transaction.",
+      "delivery_guarantee": "Immediate in-memory execution"
+    },
+    "events": {
+      "allowed": true,
+      "when_to_use": "Decoupled state change notifications using Spring Application Events for non-blocking secondary workflows.",
+      "delivery_guarantee": "At-least-once via transactional event listener with persistent outbox fallback"
+    },
+    "queue": {
+      "allowed": false,
+      "when_to_use": "Not utilized within the modular monolith deployment footprint.",
+      "delivery_guarantee": "None"
+    }
+  },
+  "module_map": [
+    {
+      "name": "Users",
+      "kind": "business",
+      "responsibility": "Manages user accounts, authentication tokens, password lifecycles, and role-based permissions.",
+      "depends_on": [],
+      "exposed_capabilities": [
+        "authenticate credentials",
+        "validate token and permissions",
+        "get user profile by identifier"
+      ]
+    },
+    {
+      "name": "Audit",
+      "kind": "platform",
+      "responsibility": "Captures and exposes an immutable centralized log of business actions and user activity.",
+      "depends_on": [],
+      "exposed_capabilities": [
+        "record business action event",
+        "query audit history"
+      ]
+    },
+    {
+      "name": "Customers",
+      "kind": "business",
+      "responsibility": "Maintains registries for customers and suppliers including contacts, addresses, and credit limits.",
+      "depends_on": [
+        "Users"
+      ],
+      "exposed_capabilities": [
+        "get customer and supplier details",
+        "validate customer credit limit",
+        "update credit balance"
+      ]
+    },
+    {
+      "name": "Catalog",
+      "kind": "business",
+      "responsibility": "Maintains product registries, categories, units of measure, and active price lists.",
+      "depends_on": [],
+      "exposed_capabilities": [
+        "get product details and prices",
+        "validate product availability status"
+      ]
+    },
+    {
+      "name": "Inventory",
+      "kind": "business",
+      "responsibility": "Tracks physical stock balances per warehouse, stock transfers, and manual inventory adjustments.",
+      "depends_on": [
+        "Catalog"
+      ],
+      "exposed_capabilities": [
+        "check stock availability per warehouse",
+        "reserve stock for order",
+        "release reserved stock",
+        "post physical stock movement"
+      ]
+    },
+    {
+      "name": "Purchasing",
+      "kind": "business",
+      "responsibility": "Manages purchase requisitions, supplier quotes, purchase orders, and goods receipt.",
+      "depends_on": [
+        "Customers",
+        "Catalog",
+        "Inventory",
+        "Users"
+      ],
+      "exposed_capabilities": [
+        "get purchase order details",
+        "verify goods receipt completion"
+      ]
+    },
+    {
+      "name": "Sales",
+      "kind": "business",
+      "responsibility": "Handles sales quotes, order validation, credit checks, inventory reservation requests, and fulfillment dispatch.",
+      "depends_on": [
+        "Customers",
+        "Catalog",
+        "Inventory",
+        "Users"
+      ],
+      "exposed_capabilities": [
+        "get sales order details",
+        "notify order fulfillment status"
+      ]
+    },
+    {
+      "name": "Finance",
+      "kind": "business",
+      "responsibility": "Controls accounts payable, accounts receivable, payment settlements, and monthly accounting closes.",
+      "depends_on": [
+        "Customers",
+        "Sales",
+        "Purchasing",
+        "Users"
+      ],
+      "exposed_capabilities": [
+        "register account receivable entry",
+        "register account payable entry",
+        "check monthly financial closing state"
+      ]
+    }
+  ],
+  "build_order": [
+    "Users",
+    "Audit",
+    "Catalog",
+    "Customers",
+    "Inventory",
+    "Purchasing",
+    "Sales",
+    "Finance"
+  ],
+  "decisions": [
+    {
+      "id": "ADR01",
+      "context": "Selecting the foundational architecture for an ERP serving 200 peak concurrent users with limited team operational bandwidth.",
+      "options_considered": [
+        "Microservices architecture",
+        "Modular monolith",
+        "Single-package traditional monolith"
+      ],
+      "decision": "Modular monolith with strictly defined package boundaries and in-memory module interfaces.",
+      "consequences": "Drastically reduces infrastructure complexity while retaining clear boundaries that enable a future microservices split if required."
+    },
+    {
+      "id": "ADR02",
+      "context": "Architecting multi-tenancy for a system starting as single-company but targeting future SaaS commercialization.",
+      "options_considered": [
+        "Database-per-tenant",
+        "Schema-per-tenant",
+        "Shared database with tenant discriminator column"
+      ],
+      "decision": "Shared database using a tenant_id discriminator column enforced via Row-Level Security.",
+      "consequences": "Minimizes initial infrastructure costs and maintenance complexity while enforcing strict logical separation across queries."
+    },
+    {
+      "id": "ADR03",
+      "context": "Selecting primary key representation for high-write ERP entities that require security and sortability.",
+      "options_considered": [
+        "Auto-increment BIGINT",
+        "Random UUIDv4",
+        "Time-ordered UUIDv7"
+      ],
+      "decision": "Adopt UUIDv7 as the universal primary key type.",
+      "consequences": "Prevents enumeration attacks across tenants while maintaining B-tree index locality and insertion performance."
+    },
+    {
+      "id": "ADR04",
+      "context": "Managing decoupled inter-module notifications without introducing heavy broker infrastructure.",
+      "options_considered": [
+        "Kafka cluster",
+        "RabbitMQ broker",
+        "Spring Application Events with PostgreSQL Transactional Outbox"
+      ],
+      "decision": "Use Spring in-memory Application Events backed by a PostgreSQL Transactional Outbox for critical side effects.",
+      "consequences": "Ensures transactionally safe event handling without managing an external message broker cluster."
+    },
+    {
+      "id": "ADR05",
+      "context": "Balancing LGPD right-to-erasure requirements with statutory 5-year financial record retention.",
+      "options_considered": [
+        "Hard delete across all tables",
+        "Cryptographic erasure",
+        "PII anonymization with immutable financial snapshot retention"
+      ],
+      "decision": "Anonymize personal information in customer registries while preserving immutable financial transaction records.",
+      "consequences": "Satisfies both Brazilian data privacy compliance and mandatory tax audit retention standards."
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Accidental data leakage across tenants if tenant discriminator filters are omitted in custom queries.",
+      "severity": "high",
+      "mitigation": "Enforce PostgreSQL Row-Level Security policies at the database engine level in addition to application-level ORM filters."
+    },
+    {
+      "risk": "Performance degradation during month-end financial closing peaks due to contested stock and ledger rows.",
+      "severity": "medium",
+      "mitigation": "Use read replicas for financial reporting and apply pessimistic locking with short timeouts strictly to active close transactions."
+    },
+    {
+      "risk": "Monolith package boundary erosion through direct entity sharing across module boundaries.",
+      "severity": "medium",
+      "mitigation": "Enforce architectural boundaries and package-private access rules at build time using ArchUnit."
+    }
+  ],
+  "assumptions": [
+    {
+      "id": "AS01",
+      "decision": "The web frontend will be developed as a responsive Single Page Application using React and TypeScript.",
+      "reason": "The constraints specify desktop and tablet browser usage without specifying a frontend technology.",
+      "reversible": true,
+      "impact_if_wrong": "medium"
+    },
+    {
+      "id": "AS02",
+      "decision": "The system will initially be deployed with a single default tenant identifier hardcoded in application configuration.",
+      "reason": "Allows single-company deployment today while satisfying the constraint of future multi-tenant SaaS readiness.",
+      "reversible": true,
+      "impact_if_wrong": "low"
+    },
+    {
+      "id": "AS03",
+      "decision": "No external message broker will be provisioned in the initial AWS infrastructure environment.",
+      "reason": "An expected load of 200 concurrent users does not warrant the cost and complexity of a separate broker.",
+      "reversible": true,
+      "impact_if_wrong": "low"
+    },
+    {
+      "id": "AS04",
+      "decision": "Direct inter-warehouse stock movements are assumed to be immediate without intermediate in-transit shipping states for the MVP.",
+      "reason": "The inventory module specification lists warehouse transfers without defining complex in-transit logistics.",
+      "reversible": true,
+      "impact_if_wrong": "low"
+    }
+  ]
+}

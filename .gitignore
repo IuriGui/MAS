@@ -1,0 +1,20 @@
+# segredos
+.env
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+
+# saídas geradas pelo pipeline (artefatos e código gerado)
+saida/
+workspace/
+
+# backup antigo
+sistemas.zip

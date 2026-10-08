@@ -1,0 +1,533 @@
+{
+  "module_name": "Users",
+  "entities": [
+    {
+      "table": "users",
+      "purpose": "Stores tenant-scoped user accounts, authentication credentials, profile data, account lifecycle status, and lockout metadata.",
+      "columns": [
+        {
+          "name": "id",
+          "sql_type": "UUID",
+          "required": true,
+          "primary_key": true,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "tenant_id",
+          "sql_type": "UUID",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "email",
+          "sql_type": "VARCHAR(255)",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "password_hash",
+          "sql_type": "VARCHAR(255)",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "full_name",
+          "sql_type": "VARCHAR(150)",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "status",
+          "sql_type": "VARCHAR(20)",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": [
+            "DEFAULT 'ACTIVE'",
+            "CHECK (status IN ('ACTIVE', 'INACTIVE', 'LOCKED'))"
+          ]
+        },
+        {
+          "name": "failed_login_attempts",
+          "sql_type": "INTEGER",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": [
+            "DEFAULT 0",
+            "CHECK (failed_login_attempts >= 0)"
+          ]
+        },
+        {
+          "name": "locked_until",
+          "sql_type": "TIMESTAMP WITH TIME ZONE",
+          "required": false,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "created_at",
+          "sql_type": "TIMESTAMP WITH TIME ZONE",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "updated_at",
+          "sql_type": "TIMESTAMP WITH TIME ZONE",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "deleted_at",
+          "sql_type": "TIMESTAMP WITH TIME ZONE",
+          "required": false,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_users_tenant_id_email",
+          "columns": [
+            "tenant_id",
+            "email"
+          ],
+          "unique": true,
+          "where": "deleted_at IS NULL",
+          "requirement": "FR01"
+        },
+        {
+          "name": "idx_users_tenant_id_status",
+          "columns": [
+            "tenant_id",
+            "status"
+          ],
+          "unique": false,
+          "where": "deleted_at IS NULL",
+          "requirement": "FR05"
+        },
+        {
+          "name": "idx_users_tenant_id",
+          "columns": [
+            "tenant_id"
+          ],
+          "unique": false,
+          "where": "null",
+          "requirement": "NFR05"
+        }
+      ],
+      "constraints": []
+    },
+    {
+      "table": "roles",
+      "purpose": "Stores tenant-scoped role definitions, including seeded system roles and custom administrative roles.",
+      "columns": [
+        {
+          "name": "id",
+          "sql_type": "UUID",
+          "required": true,
+          "primary_key": true,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "tenant_id",
+          "sql_type": "UUID",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "name",
+          "sql_type": "VARCHAR(50)",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "description",
+          "sql_type": "VARCHAR(255)",
+          "required": false,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "is_system",
+          "sql_type": "BOOLEAN",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": [
+            "DEFAULT false"
+          ]
+        },
+        {
+          "name": "created_at",
+          "sql_type": "TIMESTAMP WITH TIME ZONE",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "updated_at",
+          "sql_type": "TIMESTAMP WITH TIME ZONE",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_roles_tenant_id_name",
+          "columns": [
+            "tenant_id",
+            "name"
+          ],
+          "unique": true,
+          "where": "null",
+          "requirement": "FR11"
+        },
+        {
+          "name": "idx_roles_tenant_id",
+          "columns": [
+            "tenant_id"
+          ],
+          "unique": false,
+          "where": "null",
+          "requirement": "NFR05"
+        }
+      ],
+      "constraints": [
+        "CONSTRAINT uq_roles_tenant_id_name UNIQUE (tenant_id, name)"
+      ]
+    },
+    {
+      "table": "permissions",
+      "purpose": "Catalogs granular system-defined permission codes representing capability actions across application domains.",
+      "columns": [
+        {
+          "name": "id",
+          "sql_type": "UUID",
+          "required": true,
+          "primary_key": true,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "tenant_id",
+          "sql_type": "UUID",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "code",
+          "sql_type": "VARCHAR(100)",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "description",
+          "sql_type": "VARCHAR(255)",
+          "required": false,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "created_at",
+          "sql_type": "TIMESTAMP WITH TIME ZONE",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "updated_at",
+          "sql_type": "TIMESTAMP WITH TIME ZONE",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_permissions_tenant_id_code",
+          "columns": [
+            "tenant_id",
+            "code"
+          ],
+          "unique": true,
+          "where": "null",
+          "requirement": "FR07"
+        }
+      ],
+      "constraints": [
+        "CONSTRAINT uq_permissions_tenant_id_code UNIQUE (tenant_id, code)"
+      ]
+    },
+    {
+      "table": "user_roles",
+      "purpose": "Associative table linking users to their assigned roles within a tenant.",
+      "columns": [
+        {
+          "name": "id",
+          "sql_type": "UUID",
+          "required": true,
+          "primary_key": true,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "tenant_id",
+          "sql_type": "UUID",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "user_id",
+          "sql_type": "UUID",
+          "required": true,
+          "primary_key": false,
+          "reference": "users.id",
+          "constraints": []
+        },
+        {
+          "name": "role_id",
+          "sql_type": "UUID",
+          "required": true,
+          "primary_key": false,
+          "reference": "roles.id",
+          "constraints": []
+        },
+        {
+          "name": "created_at",
+          "sql_type": "TIMESTAMP WITH TIME ZONE",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "updated_at",
+          "sql_type": "TIMESTAMP WITH TIME ZONE",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_user_roles_tenant_user_id",
+          "columns": [
+            "tenant_id",
+            "user_id"
+          ],
+          "unique": false,
+          "where": "null",
+          "requirement": "FR07"
+        },
+        {
+          "name": "idx_user_roles_tenant_role_id",
+          "columns": [
+            "tenant_id",
+            "role_id"
+          ],
+          "unique": false,
+          "where": "null",
+          "requirement": "FR07"
+        },
+        {
+          "name": "idx_user_roles_tenant_user_role",
+          "columns": [
+            "tenant_id",
+            "user_id",
+            "role_id"
+          ],
+          "unique": true,
+          "where": "null",
+          "requirement": "FR01"
+        }
+      ],
+      "constraints": [
+        "CONSTRAINT uq_user_roles_tenant_user_role UNIQUE (tenant_id, user_id, role_id)"
+      ]
+    },
+    {
+      "table": "role_permissions",
+      "purpose": "Associative table linking tenant roles to their granted granular permissions.",
+      "columns": [
+        {
+          "name": "id",
+          "sql_type": "UUID",
+          "required": true,
+          "primary_key": true,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "tenant_id",
+          "sql_type": "UUID",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "role_id",
+          "sql_type": "UUID",
+          "required": true,
+          "primary_key": false,
+          "reference": "roles.id",
+          "constraints": []
+        },
+        {
+          "name": "permission_id",
+          "sql_type": "UUID",
+          "required": true,
+          "primary_key": false,
+          "reference": "permissions.id",
+          "constraints": []
+        },
+        {
+          "name": "created_at",
+          "sql_type": "TIMESTAMP WITH TIME ZONE",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        },
+        {
+          "name": "updated_at",
+          "sql_type": "TIMESTAMP WITH TIME ZONE",
+          "required": true,
+          "primary_key": false,
+          "reference": "null",
+          "constraints": []
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_role_permissions_tenant_role_id",
+          "columns": [
+            "tenant_id",
+            "role_id"
+          ],
+          "unique": false,
+          "where": "null",
+          "requirement": "FR07"
+        },
+        {
+          "name": "idx_role_permissions_tenant_permission_id",
+          "columns": [
+            "tenant_id",
+            "permission_id"
+          ],
+          "unique": false,
+          "where": "null",
+          "requirement": "FR11"
+        },
+        {
+          "name": "idx_role_permissions_tenant_role_perm",
+          "columns": [
+            "tenant_id",
+            "role_id",
+            "permission_id"
+          ],
+          "unique": true,
+          "where": "null",
+          "requirement": "FR11"
+        }
+      ],
+      "constraints": [
+        "CONSTRAINT uq_role_permissions_tenant_role_permission UNIQUE (tenant_id, role_id, permission_id)"
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "source": "users",
+      "target": "user_roles",
+      "cardinality": "1:N",
+      "via": "user_roles.user_id",
+      "description": "A user has one or more tenant role assignment records."
+    },
+    {
+      "source": "roles",
+      "target": "user_roles",
+      "cardinality": "1:N",
+      "via": "user_roles.role_id",
+      "description": "A role is linked to user assignment records."
+    },
+    {
+      "source": "roles",
+      "target": "role_permissions",
+      "cardinality": "1:N",
+      "via": "role_permissions.role_id",
+      "description": "A role has one or more permission grant records."
+    },
+    {
+      "source": "permissions",
+      "target": "role_permissions",
+      "cardinality": "1:N",
+      "via": "role_permissions.permission_id",
+      "description": "A permission is linked to role permission records."
+    },
+    {
+      "source": "users",
+      "target": "roles",
+      "cardinality": "N:N",
+      "via": "user_roles",
+      "description": "Users are assigned roles through the user_roles join table."
+    },
+    {
+      "source": "roles",
+      "target": "permissions",
+      "cardinality": "N:N",
+      "via": "role_permissions",
+      "description": "Roles are composed of granular permissions through the role_permissions join table."
+    }
+  ],
+  "external_references": [],
+  "integrity_rules": [
+    "Email uniqueness is strictly enforced per tenant among non-deleted user records via a partial unique index on (tenant_id, email) WHERE deleted_at IS NULL (FR01, NFR05).",
+    "User status transitions are constrained to ACTIVE, INACTIVE, and LOCKED via column-level CHECK constraint (FR05).",
+    "Failed login attempts must be non-negative (CHECK failed_login_attempts >= 0) and reset upon successful authentication (FR03).",
+    "System roles marked with is_system = true cannot be removed, and role names must be unique within a tenant via UNIQUE (tenant_id, name) (FR11).",
+    "Associative records in user_roles and role_permissions enforce composite uniqueness per tenant, preventing duplicate role or permission grants (FR01, FR07, FR11).",
+    "Physical referential integrity is strictly maintained within module boundaries with foreign keys referencing users(id), roles(id), and permissions(id) (NFR04)."
+  ],
+  "assumptions": [
+    "System-wide permission codes are seeded into the permissions table per tenant (or associated with a designated system tenant UUID) to satisfy the strict architecture constraint requiring tenant_id on every table.",
+    "Ephemeral password reset tokens, session refresh tokens, and authentication blacklists are managed in Redis with automatic TTL eviction in accordance with NFR06, requiring no persistent database tables.",
+    "Email addresses are normalized to lowercase prior to persistence to ensure case-insensitive uniqueness per tenant."
+  ],
+  "data_model_summary": "The Users module data model provides tenant-isolated user identity management, credential authentication, and Role-Based Access Control (RBAC). It consists of five tables: users (holding credentials, profile data, account lifecycle status, and lockout metadata), roles (holding tenant-defined and system roles), permissions (cataloging code-level capability codes), user_roles (associative table mapping users to roles), and role_permissions (associative table granting permissions to roles). All tables include UUIDv7 primary keys, tenant discriminators, and UTC timestamps."
+}

@@ -1,0 +1,1 @@
+The Users module manages the people who access the ERP. It must allow users to be registered, edited, and deactivated, and control what each user can do in the system through roles. Login must be secure. Users can have multiple roles. Administrators can access everything. The system must record who performed each action.
