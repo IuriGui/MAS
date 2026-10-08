@@ -1,8 +1,109 @@
 # Alterações
 
+- [Rodada 4 — Execução completa, compilação do código gerado e correções](#rodada-4--execução-completa-compilação-do-código-gerado-e-correções)
 - [Rodada 3 — Limites contra repetição sem fim e primeira execução real](#rodada-3--limites-contra-repetição-sem-fim-e-primeira-execução-real)
 - [Rodada 2 — Planejador e Implementadores (backend e frontend)](#rodada-2--planejador-e-implementadores-backend-e-frontend)
 - [Rodada 1 — Integração do Arquiteto-chefe e execução por projeto](#rodada-1--integração-do-arquiteto-chefe-e-execução-por-projeto)
+
+---
+
+## Rodada 4 — Execução completa, compilação do código gerado e correções
+
+Data: 08/10/2026.
+
+### Correções antes da execução
+
+- **Reparo de caminho trocado** (`implementacao.reparar_caminhos`): resolve a
+  causa da falha da rodada 3. Quando o modelo escreve a classe `P.X` com o
+  `path` de outro arquivo do lote e `P.X` está faltando, o código corrige o
+  `path` antes de validar, sem nova chamada ao modelo. A saída real que falhou
+  virou caso de teste (`tests/dados/lote_caminho_trocado.json`).
+- **Retomada por arquivo**: cada lote aprovado é registrado em
+  `<etapa>.progresso.json`, e uma nova execução gera só os arquivos pendentes.
+- **Falsos positivos**:
+  - `TODO`/`FIXME` só são detectados em maiúsculas, porque "todo" é uma palavra
+    comum em textos de tela em português;
+  - `package-info.java` não precisa declarar um tipo;
+  - imports de arquivos `.d.ts` passaram a ser reconhecidos.
+- **URLs da API no frontend da base**: a validação reprovaria sempre o login,
+  porque a base não conhecia nenhum endpoint. Agora a base recebe os endpoints
+  das arquiteturas conhecidas e, sem nenhuma, não tem as URLs checadas.
+
+### Segunda execução real (retomada)
+
+A retomada continuou a execução da rodada 3, com `--de planejador`. Os
+artefatos 1–4 e os 25 arquivos já aprovados da base foram reaproveitados.
+
+```
+SAIDA_DIR=saida/execucoes/20261008 python3 main.py --nome Users \
+    --arquivo exemplos/erp/modulos/users.md --de planejador
+```
+Log: `saida/execucoes/20261008_retomada.log`.
+
+| Etapa | Lotes | Tentativas | Tokens (entrada / saída) | Tempo |
+|---|---|---|---|---|
+| Backend da base (3 arquivos pendentes) | 1 | 1 | 13 mil / 5 mil | 32 s |
+| Frontend da base | 4 | 4 | 40 mil / 19 mil | 121 s |
+| Planejador do módulo | — | 1 | 26 mil / 11 mil | 68 s |
+| Backend do módulo | 8 | 8 | 259 mil / 108 mil | 672 s |
+| Frontend do módulo | 3 | 4 | 85 mil / 56 mil | 325 s |
+
+**A pipeline completou**: 65 arquivos de backend e 30 de frontend em
+`saida/execucoes/20261008/users/codigo/`. Houve uma reprovação, no frontend do
+módulo: o mesmo erro de caminho trocado, agora num `.tsx`. O retry resolveu. Na
+época, o reparo automático cobria só Java/Kotlin.
+
+### O código gerado compila? Ainda não
+
+Verificação feita à mão, fora da pipeline:
+- backend: `mvn test-compile`;
+- frontend: `npm install --ignore-scripts` e `tsc --noEmit`.
+
+| Lado | Resultado |
+|---|---|
+| Backend | **Falha**: 14 erros distintos, em 3 arquivos do módulo. **A base compilou sem erros.** |
+| Frontend | **Falha**: 11 erros (`tsc`). |
+
+Todos os erros têm a mesma raiz: **o modelo não viu a API que estava usando**.
+- **Limite de contexto baixo demais (bug da pipeline):** o lote dos serviços
+  dependia de 16 arquivos, e o limite de 60 mil caracteres cortou 9 deles,
+  inclusive todos os repositórios. O modelo inventou nomes de métodos
+  (`findByTenantIdAndIdIn` no lugar do real `findAllByTenantIdAndIdInAndDeletedAtIsNull`).
+- **Base mostrada só por caminho e `exports`:** o modelo errou
+  - o construtor de `BusinessException`;
+  - as props de `ProtectedRoute` (`roles` em vez de `requiredRoles`);
+  - os campos de `PaginatedResponse` (`total_elements` em vez de `totalElements`).
+- **Menores:** faltou o `vite-env.d.ts` na base (`import.meta.env`), e havia
+  variáveis sem uso, que reprovam no modo estrito do TypeScript.
+
+### Correções depois da execução (ainda não testadas com o Gemini)
+
+- **`assinaturas.py`** (novo): extrai as assinaturas públicas de um arquivo:
+  - Java/Kotlin: construtores, métodos, campos e métodos de interface;
+  - TS/JS: blocos `interface`/`type`/`enum` inteiros e a primeira linha de cada
+    `export`.
+- **Dependências nunca são omitidas:** até o limite vão inteiras; depois dele,
+  só com as assinaturas. O limite subiu para 400 mil caracteres (≈100 mil
+  tokens; o Gemini aceita ~1M).
+- **API da base em todo lote de módulo:** a seção "BASE API" traz as assinaturas
+  de todos os arquivos da base.
+- **Prompts:**
+  - nunca chamar método que não apareça no código ou nas assinaturas mostradas;
+  - sem imports e variáveis sem uso;
+  - código compatível com o compilador estrito;
+  - a base inclui as declarações de tipo que a ferramenta de build exige.
+- **Reparo de caminho também no frontend:** o arquivo é reatribuído quando
+  exporta todos os `exports` planejados de exatamente um arquivo que falta.
+
+São 8 testes novos; 102 no total, todos passando sem chamar o Gemini.
+
+### Próximo passo recomendado
+
+**Ciclo de compilação na pipeline.** Depois de cada lado, rodar
+`mvn test-compile` ou `tsc --noEmit`, mapear cada erro para o arquivo que o
+causou e devolver ao Implementador só esses arquivos, com os erros e um limite de
+rodadas. As correções acima reduzem a causa, mas só a compilação garante que o
+resultado compila.
 
 ---
 

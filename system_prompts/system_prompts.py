@@ -282,7 +282,9 @@ Plan the shared skeleton every module plugs into, and nothing module-specific:
   auditing support, transactional outbox if events use it, pagination types);
 - frontend: package/build files, HTML entry, app entry, app shell/layout, router,
   HTTP client (base URL, auth token, error handling) and auth state. The router
-  imports every module's routes file at the paths given in the message;
+  imports every module's routes file at the paths given in the message. Include
+  the ambient type declarations the build tool needs (e.g. src/vite-env.d.ts
+  for Vite, so import.meta.env type-checks);
 - conventions: the rules module files must follow (what the routes file
   exports, which base classes to extend, how to throw errors, how to read the
   current user/tenant, how to call the HTTP client). Be concrete: name the files
@@ -331,6 +333,10 @@ Strict Rules:
 - Enforce the roles declared for each endpoint, the tenant isolation and the
   error format defined in the PROJECT CONTEXT and in the BASE conventions.
 - Reach other modules ONLY through their public interfaces or events.
+- Call only constructors, methods and fields that exist in the code or
+  signatures shown in the message (BASE API, dependencies). Never guess a
+  repository or service method name: if it is not shown, it does not exist.
+- No unused imports or variables.
 - Tests use the test framework usual for the stack and exercise the business
   rules (not only getters/setters).
 - Do not restate numeric parameters from requirements as magic numbers spread
@@ -364,6 +370,10 @@ Strict Rules:
 - Validate forms according to the requirements (required fields, lengths,
   formats) and show the API errors in the format of the PROJECT CONTEXT.
 - The module routes file follows the routes convention of the BASE exactly.
+- Use the exact props, types and field names of the BASE API shown in the
+  message (e.g. a paginated response field is spelled as declared there).
+- The code must pass the strict compiler of the stack: no unused imports,
+  variables or parameters; no implicit any.
 - Accessible, responsive markup (desktop and tablet); no inline secrets.
 
 MANDATORY Format (Structured/JSON):

@@ -192,6 +192,7 @@ def msg_implementador_backend(
     lote: List[PlannedFile],
     i: int,
     n: int,
+    api_base: str = "",
 ) -> str:
     return (
         f"MODE: MODULE\nMODULE: {nome} — batch {i}/{n}\n\n"
@@ -201,6 +202,8 @@ def msg_implementador_backend(
         f"IMPLEMENTATION PLAN — backend files (JSON):\n{_arquivos(plano.backend_files)}\n"
         f"Implementation notes:\n" + "\n".join(f"- {x}" for x in plano.implementation_notes)
         + f"\n\nBASE:\n{resumo_base(plano_base, 'backend')}\n\n"
+        f"BASE API (public signatures; use these exact constructors and methods):\n"
+        f"{api_base or NO_FILES}\n\n"
         f"OTHER MODULES' PUBLIC CODE:\n{externas or NO_FILES}\n\n"
         f"CONTENT OF FILES THIS BATCH DEPENDS ON:\n{dependencias or NO_FILES}\n\n"
         + _lote(lote)
@@ -217,6 +220,7 @@ def msg_implementador_frontend(
     lote: List[PlannedFile],
     i: int,
     n: int,
+    api_base: str = "",
 ) -> str:
     reqs = [r.model_dump() for r in
             list(especificacao.functional_requirements)
@@ -231,6 +235,8 @@ def msg_implementador_frontend(
         + json.dumps([t.model_dump() for t in plano.screens], indent=2, ensure_ascii=False)
         + f"\n\nIMPLEMENTATION PLAN — frontend files (JSON):\n{_arquivos(plano.frontend_files)}"
         f"\n\nBASE:\n{resumo_base(plano_base, 'frontend')}\n\n"
+        f"BASE API (public signatures; use these exact props, types and field names):\n"
+        f"{api_base or NO_FILES}\n\n"
         f"CONTENT OF FILES THIS BATCH DEPENDS ON:\n{dependencias or NO_FILES}\n\n"
         + _lote(lote)
     )

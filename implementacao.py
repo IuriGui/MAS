@@ -16,6 +16,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 import layout
 import validation
+from assinaturas import assinaturas
 from config import IMPL_LIMITE_CONTEXTO, IMPL_LOTE, MAX_TENTATIVAS
 from ddl import gerar_ddl, usa_sql
 from execucao import PipelineError, executar_agente
@@ -73,30 +74,48 @@ def _tipo_declarado(conteudo: str) -> Optional[Tuple[str, str]]:
     return (pacote.group(1), tipo.group(1)) if pacote and tipo else None
 
 
+def _exporta_tudo(conteudo: str, nomes: List[str]) -> bool:
+    """O conteúdo declara num `export` todos os nomes (TS/JS)."""
+    return bool(nomes) and all(
+        re.search(rf"^\s*export\b[^\n]*\b{re.escape(n)}\b", conteudo, re.M) for n in nomes)
+
+
 def reparar_caminhos(gerados: GeneratedFiles, pedidos: List[PlannedFile]) -> None:
-    """Corrige em código um erro recorrente do modelo: escrever a classe X com o
+    """Corrige em código um erro recorrente do modelo: escrever o arquivo X com o
     `path` de outro arquivo do lote (fica um arquivo duplicado e X faltando).
 
-    Só reatribui quando é inequívoco: o arquivo declara o tipo X no pacote P,
-    seu caminho atual não corresponde a X, e o arquivo pedido que falta é
-    exatamente P.X (mesmo pacote e mesmo nome).
+    Só reatribui quando é inequívoco:
+    - Java/Kotlin: o arquivo declara o tipo P.X e o arquivo pedido que falta é
+      exatamente P.X (mesmo pacote e mesmo nome);
+    - demais (TS/JS...): o arquivo exporta todos os `exports` planejados de
+      exatamente um arquivo que falta, e não os do seu próprio caminho.
     """
-    pedidos_fq = {layout.fqcn(f.path): f.path for f in pedidos if layout.fqcn(f.path)}
+    por_caminho = {f.path: f for f in pedidos}
     entregues = [f.path for f in gerados.files]
-    faltando = {fq: p for fq, p in pedidos_fq.items() if p not in entregues}
+    faltando = [p for p in por_caminho if p not in entregues]
     for f in gerados.files:
-        if not faltando or not f.path.endswith((".java", ".kt")):
-            continue
-        declarado = _tipo_declarado(layout.limpar_conteudo(f.content))
-        if not declarado:
-            continue
-        fq = f"{declarado[0]}.{declarado[1]}"
-        if fq == layout.fqcn(f.path) or fq not in faltando:
-            continue
-        novo = faltando.pop(fq)
-        gerados.notes.append(f"Caminho corrigido automaticamente: {f.path} -> {novo}")
-        print(f"  reparo: {f.path} -> {novo}")
-        f.path = novo
+        if not faltando:
+            return
+        conteudo = layout.limpar_conteudo(f.content)
+        novo = None
+        if f.path.endswith((".java", ".kt")):
+            declarado = _tipo_declarado(conteudo)
+            if declarado:
+                fq = f"{declarado[0]}.{declarado[1]}"
+                if fq != layout.fqcn(f.path):
+                    novo = next((p for p in faltando if layout.fqcn(p) == fq), None)
+        elif entregues.count(f.path) > 1 or f.path not in por_caminho:
+            proprio = por_caminho.get(f.path)
+            if not (proprio and _exporta_tudo(conteudo, proprio.exports)):
+                candidatos = [p for p in faltando
+                              if _exporta_tudo(conteudo, por_caminho[p].exports)]
+                novo = candidatos[0] if len(candidatos) == 1 else None
+        if novo:
+            faltando.remove(novo)
+            entregues[entregues.index(f.path)] = novo
+            gerados.notes.append(f"Caminho corrigido automaticamente: {f.path} -> {novo}")
+            print(f"  reparo: {f.path} -> {novo}")
+            f.path = novo
 
 
 # ------------------------------------------------------------- lotes
@@ -129,7 +148,11 @@ def montar_lotes(arquivos: List[PlannedFile], tamanho: int = IMPL_LOTE) -> List[
 
 def conteudo_dependencias(raiz: Path, lote: List[PlannedFile],
                           limite: int = IMPL_LIMITE_CONTEXTO) -> str:
-    """Conteúdo dos arquivos (já gravados) de que o lote depende."""
+    """Conteúdo dos arquivos (já gravados) de que o lote depende.
+
+    Até `limite` caracteres vão inteiros; os seguintes vão só com as
+    assinaturas públicas (nunca omitidos: sem eles o modelo inventa APIs).
+    """
     no_lote = {f.path for f in lote}
     partes, total = [], 0
     vistos: Set[str] = set()
@@ -141,10 +164,29 @@ def conteudo_dependencias(raiz: Path, lote: List[PlannedFile],
             texto = (raiz / d).read_text(encoding="utf-8")
             bloco = f"=== {d} ===\n{texto}"
             if total + len(bloco) > limite:
-                partes.append(f"=== {d} === (omitido: limite de contexto)")
-                continue
+                bloco = (f"=== {d} === (só assinaturas públicas: limite de contexto)\n"
+                         f"{assinaturas(d, texto)}")
             partes.append(bloco)
             total += len(bloco)
+    return "\n\n".join(partes)
+
+
+def api_da_base(raiz_lado: Path, plano_base: Optional[ImplementationPlan], lado: str) -> str:
+    """Assinaturas públicas de todos os arquivos da base já gerados neste lado.
+
+    Os módulos usam construtores, métodos, props e tipos da base; só caminho e
+    `exports` não bastam (na 2ª execução real o modelo errou o construtor de
+    BusinessException, as props de ProtectedRoute e os campos de PaginatedResponse).
+    """
+    if not plano_base:
+        return ""
+    partes = []
+    for f in getattr(plano_base, f"{lado}_files"):
+        arquivo = raiz_lado / f.path
+        if arquivo.is_file():
+            resumo = assinaturas(f.path, arquivo.read_text(encoding="utf-8"))
+            if resumo:
+                partes.append(f"=== {f.path} ===\n{resumo}")
     return "\n\n".join(partes)
 
 
@@ -357,11 +399,13 @@ def implementar_backend(
         destino.write_text(ddl, encoding="utf-8")
         manifesto.append({"path": migracao, "lote": 0, "gerado_por": "ddl.py"})
     externas = interfaces_externas(raiz, arq, lay.backend_prefixos)
+    api_base = api_da_base(raiz, plano_base, "backend")
     tabelas = {e.table for e in modelo.entities}
     manifesto += executar_lotes(
         "implementador_backend", agente, plano.backend_files, raiz,
         lambda lote, deps, i, n: templates.msg_implementador_backend(
-            nome, spec, arq, plano, plano_base, ddl, externas, deps, lote, i, n),
+            nome, spec, arq, plano, plano_base, ddl, externas, deps, lote, i, n,
+            api_base),
         lambda: _conhecidos(raiz, [plano, plano_base], "backend", contexto,
                             tabelas=tabelas),
         pasta, metricas, max_tentativas, nome)
@@ -377,10 +421,11 @@ def implementar_frontend(
     raiz = codigo_dir / "frontend"
     endpoints = {validation.normalizar_rota(e.path) for e in arq.endpoints}
     endpoints |= {validation.normalizar_rota(e) for e in endpoints_externos}
+    api_base = api_da_base(raiz, plano_base, "frontend")
     return executar_lotes(
         "implementador_frontend", agente, plano.frontend_files, raiz,
         lambda lote, deps, i, n: templates.msg_implementador_frontend(
-            nome, spec, arq, plano, plano_base, deps, lote, i, n),
+            nome, spec, arq, plano, plano_base, deps, lote, i, n, api_base),
         lambda: _conhecidos(raiz, [plano, plano_base], "frontend", contexto,
                             endpoints=endpoints),
         pasta, metricas, max_tentativas, nome)

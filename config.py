@@ -24,8 +24,11 @@ CONTEXTO_PADRAO = os.environ.get(
 # Quantos arquivos cada chamada de Implementador gera
 IMPL_LOTE = max(1, int(os.environ.get("IMPL_LOTE", "5")))
 
-# Limite (caracteres) do conteúdo de dependências anexado a cada lote
-IMPL_LIMITE_CONTEXTO = int(os.environ.get("IMPL_LIMITE_CONTEXTO", "60000"))
+# Limite (caracteres) do conteúdo integral de dependências anexado a cada lote.
+# Acima dele, os arquivos seguintes vão só com as assinaturas públicas.
+# (60 mil era pouco: na 2ª execução real cortou os repositórios do lote de
+# serviços, e o modelo inventou nomes de métodos.) ~400 mil caracteres ≈ 100 mil tokens.
+IMPL_LIMITE_CONTEXTO = int(os.environ.get("IMPL_LIMITE_CONTEXTO", "400000"))
 
 # --- Limites contra repetição sem fim -------------------------------------
 # O create_agent do LangChain usa recursion_limit=9999: se o modelo erra o

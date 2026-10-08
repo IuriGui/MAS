@@ -62,6 +62,7 @@ Rodando um módulo sozinho, a base e o código ficam em `saida/<modulo>/base` e 
 - `projeto.py` Arquiteto-chefe + base + vários módulos · `pipeline.py` um módulo
 - `implementacao.py` Planejador, Implementadores (lotes), base compartilhada
 - `ddl.py` migration a partir do modelo · `layout.py` onde cada arquivo pode morar
+- `assinaturas.py` assinaturas públicas de arquivos (contexto dos Implementadores)
 - `execucao.py` invoca agente + valida + nova tentativa
 - `render.py` JSON → markdown
 - `tools/` tools de arquivo (não usadas pelo pipeline; demo em `scripts/`)

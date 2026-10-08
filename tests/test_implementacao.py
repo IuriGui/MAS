@@ -625,3 +625,114 @@ def test_base_recebe_endpoints_do_modulo(tmp_path):
     base_front = [c for c in ags["implementador_frontend"].chamadas if "MODE: BASE" in c]
     assert base_front and all("KNOWN API ENDPOINTS" in c and '"/api/v1/users"' in c
                               for c in base_front)
+
+
+def test_reparo_frontend_pelos_exports():
+    """Padrão visto na 2ª execução real: UserListPage entregue com o path de UserFormPage."""
+    lista = arq(f"{FRONT}pages/UserListPage.tsx", "page", ["UserListPage"])
+    form = arq(f"{FRONT}pages/UserFormPage.tsx", "page", ["UserFormPage"])
+    g = GeneratedFiles(files=[
+        GeneratedFile(path=form.path, content="export default function UserFormPage() {}\n"),
+        GeneratedFile(path=form.path, content="export const UserListPage = () => null;\n"),
+    ], notes=[])
+    implementacao.reparar_caminhos(g, [lista, form])
+    assert [f.path for f in g.files] == [form.path, lista.path]
+    assert validation.validar_arquivos(g, [lista, form], conhecidos()) == []
+
+
+def test_reparo_frontend_ambiguo_nao_mexe():
+    a = arq(f"{FRONT}a.ts", "types", ["X"])
+    b = arq(f"{FRONT}b.ts", "types", ["X"])  # mesmos exports: ambíguo
+    c = arq(f"{FRONT}c.ts", "types", ["Y"])
+    g = GeneratedFiles(files=[GeneratedFile(path=c.path, content="export const Y = 1;\n"),
+                              GeneratedFile(path=c.path, content="export const X = 1;\n")],
+                       notes=[])
+    implementacao.reparar_caminhos(g, [a, b, c])
+    assert [f.path for f in g.files] == [c.path, c.path] and g.notes == []
+
+
+# ================================================================ assinaturas no contexto
+from assinaturas import assinaturas  # noqa: E402
+
+JAVA_REPO = """package com.x.repo;
+
+import java.util.UUID;
+
+public interface RoleRepository extends JpaRepository<Role, UUID> {
+    Optional<Role> findByTenantIdAndCode(UUID tenantId, String code);
+    List<Role> findAllByTenantIdAndIdIn(UUID tenantId, Collection<UUID> ids);
+}
+"""
+JAVA_CLASSE = """package com.x.error;
+
+public class BusinessException extends RuntimeException {
+    private final String code;
+    public static final int LIMITE = 5;
+
+    public BusinessException(String code, String message) {
+        super(message);
+        this.code = code;
+    }
+
+    public String getCode() {
+        return code;
+    }
+
+    private void interno() {
+        int x = 1;
+    }
+}
+"""
+TSX = """import React from 'react';
+
+interface Props {
+  requiredRoles?: string[];
+}
+
+export const ProtectedRoute: React.FC<Props> = ({ requiredRoles }) => {
+  const ok = true;
+  return null;
+};
+
+export function soma(a: number, b: number): number {
+  return a + b;
+}
+"""
+
+
+def test_assinaturas_java():
+    r = assinaturas("R.java", JAVA_REPO)
+    assert "findAllByTenantIdAndIdIn(UUID tenantId, Collection<UUID> ids);" in r
+    c = assinaturas("B.java", JAVA_CLASSE)
+    assert "public BusinessException(String code, String message) { ... }" in c
+    assert "public static final int LIMITE = 5;" in c
+    assert "super(message)" not in c and "interno" not in c and "private" not in c
+
+
+def test_assinaturas_tsx():
+    r = assinaturas("P.tsx", TSX)
+    assert "requiredRoles?: string[];" in r
+    assert "export const ProtectedRoute: React.FC<Props> = ({ requiredRoles }) => ..." in r
+    assert "export function soma(a: number, b: number): number { ... }" in r
+    assert "const ok" not in r and "return a + b" not in r
+
+
+def test_dependencias_acima_do_limite_vao_como_assinaturas(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a/RoleRepository.java").write_text(JAVA_REPO)
+    (tmp_path / "a/BusinessException.java").write_text(JAVA_CLASSE)
+    f = arq("a/Servico.java", "service",
+            deps=["a/BusinessException.java", "a/RoleRepository.java"])
+    txt = implementacao.conteudo_dependencias(tmp_path, [f], limite=len(JAVA_CLASSE) + 40)
+    assert "super(message)" in txt                       # 1º inteiro
+    assert "só assinaturas" in txt                        # 2º resumido, não omitido
+    assert "findAllByTenantIdAndIdIn" in txt
+
+
+def test_lotes_do_modulo_recebem_api_da_base(tmp_path):
+    ags = agentes()
+    processar_modulo("Usuários", "d", agentes=ags, saida_dir=str(tmp_path))
+    back = [c for c in ags["implementador_backend"].chamadas if "MODE: MODULE" in c]
+    front = [c for c in ags["implementador_frontend"].chamadas if "MODE: MODULE" in c]
+    assert all("BASE API" in c and "public class ApiException { ... }" in c for c in back)
+    assert all("BASE API" in c and "export const http = 1;" in c for c in front)
