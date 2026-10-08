@@ -208,6 +208,20 @@ def processar_modulo(
             templates.msg_arquiteto_software(nome, spec, modelo, outros_modulos),
             lambda a: validation.validar_arquitetura(a, spec, modelo, conv))
 
+    try:
+        return _etapas_de_implementacao(
+            nome, contexto, artefatos, agentes, pasta, codigo, metricas, ate, roda,
+            falhar, plano_base, numero_migracao, outros_modulos, endpoints_externos,
+            max_tentativas)
+    finally:
+        # grava métricas mesmo se uma etapa de implementação falhar
+        (pasta / "metricas.json").write_text(json.dumps(metricas, indent=2))
+
+
+def _etapas_de_implementacao(nome, contexto, artefatos, agentes, pasta, codigo,
+                             metricas, ate, roda, falhar, plano_base,
+                             numero_migracao, outros_modulos, endpoints_externos,
+                             max_tentativas) -> dict:
     # Base compartilhada (esqueleto) — só quando há implementação a fazer
     if any(roda(e) for e in ETAPAS[4:]) and plano_base is None:
         plano_base = implementacao.garantir_base(

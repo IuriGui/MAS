@@ -500,3 +500,8 @@ def test_base_reprovada(tmp_path):
         processar_modulo("Usuários", "d", agentes=agentes(back=back),
                          saida_dir=str(tmp_path), max_tentativas=2)
     assert (tmp_path / "usuarios/base/implementador_backend_base.lote1.invalido.json").exists()
+    # métricas preservadas mesmo com a falha (custo das etapas que rodaram)
+    m = json.loads((tmp_path / "usuarios/metricas.json").read_text())
+    assert m["arquiteto_software"]["tentativas"] == 1
+    mb = json.loads((tmp_path / "usuarios/base/metricas.json").read_text())
+    assert mb["implementador_backend_base"]["tentativas"] == 2

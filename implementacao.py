@@ -213,12 +213,24 @@ def garantir_base(
         if erros:
             (pasta / "planejador_base.invalido.json").write_text(
                 plano.model_dump_json(indent=2), encoding="utf-8")
+            _salvar_json(pasta / "metricas.json", metricas)
             raise PipelineError("Plano da base não passou na validação:\n- "
                                 + "\n- ".join(erros))
         arq_plano.write_text(plano.model_dump_json(indent=2), encoding="utf-8")
 
     if ate_lado is None:
+        _salvar_json(pasta / "metricas.json", metricas)
         return plano
+    try:
+        _implementar_base(contexto, modulos, pasta, codigo_dir, agentes, ate_lado,
+                          max_tentativas, metricas, plano, rotas, front)
+    finally:
+        _salvar_json(pasta / "metricas.json", metricas)  # mesmo se falhar
+    return plano
+
+
+def _implementar_base(contexto, modulos, pasta, codigo_dir, agentes, ate_lado,
+                      max_tentativas, metricas, plano, rotas, front) -> None:
     lados = LADOS[: LADOS.index(ate_lado) + 1]
     for lado in lados:
         manifesto_arq = pasta / f"{6 + LADOS.index(lado)}_{lado}.json"
@@ -235,8 +247,6 @@ def garantir_base(
                 raiz, [plano], lado, contexto, rotas_modulos=set(rotas)),
             pasta, metricas, max_tentativas, "base")
         _salvar_json(manifesto_arq, manifesto)
-    _salvar_json(pasta / "metricas.json", metricas)
-    return plano
 
 
 # ------------------------------------------------------------- módulo

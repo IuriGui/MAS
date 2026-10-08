@@ -1,7 +1,84 @@
 # Alterações
 
+- [Rodada 3 — Limites contra repetição sem fim e primeira execução real](#rodada-3--limites-contra-repetição-sem-fim-e-primeira-execução-real)
 - [Rodada 2 — Planejador e Implementadores (backend e frontend)](#rodada-2--planejador-e-implementadores-backend-e-frontend)
 - [Rodada 1 — Integração do Arquiteto-chefe e execução por projeto](#rodada-1--integração-do-arquiteto-chefe-e-execução-por-projeto)
+
+---
+
+## Rodada 3 — Limites contra repetição sem fim e primeira execução real
+
+Data: 08/10/2026. Projeto versionado com git a partir desta rodada.
+
+### Problema encontrado
+
+O `create_agent` do LangChain define `recursion_limit=9999`. Com o Gemini, a saída
+estruturada usa *tool strategy* com `handle_errors=True`. Assim, se o modelo erra
+o formato, a biblioteca chama o modelo de novo **até ~9.999 passos**, fora do
+nosso controle de tentativas. Isso foi reproduzido com um modelo falso que sempre
+erra: o teste foi interrompido à força em 60 chamadas. Além disso, a chamada HTTP
+não tinha timeout.
+
+### Limites (todos finitos)
+
+| Onde | Limite | Configuração |
+|---|---|---|
+| Chamadas ao modelo por tentativa | 3 (resposta + 1 correção de formato interna) | `LIMITE_PASSOS_AGENTE` (mín. 2) |
+| Tentativas por etapa ou lote | 2 | `MAX_TENTATIVAS` (mín. 1) |
+| Repetições em erro HTTP | 3 | `MAX_RETRIES_API` |
+| Tempo por chamada HTTP | 600 s | `TIMEOUT_API` |
+| Arquivos por lote | 5 (mín. 1; com 0, o laço de lotes não avançava) | `IMPL_LOTE` |
+
+O pior caso por etapa ou lote é `MAX_TENTATIVAS × LIMITE_PASSOS_AGENTE` = 6
+chamadas ao modelo. Quando o modelo não produz saída estruturada, a tentativa
+conta como reprovada. Se nenhuma tentativa produz saída, a etapa falha com
+`PipelineError`; antes, a pipeline quebrava com `KeyError`.
+
+Testes em `tests/test_limites.py` (9). Eles usam o `create_agent` real com
+modelos falsos e cobrem:
+- formato sempre errado: exatamente 2 × 3 chamadas e depois erro;
+- formato corrigido dentro da mesma tentativa;
+- formato corrigido na tentativa seguinte;
+- validação sempre reprovada: exatamente `max_tentativas` chamadas;
+- agente sem `structured_response`;
+- `recursion_limit` enviado na configuração da chamada;
+- lote de tamanho 0;
+- valores 0 nas variáveis de ambiente;
+- timeout e retries HTTP no modelo.
+
+Correção relacionada: quando uma etapa de implementação ou a base falhava, o
+`metricas.json` não era gravado, e o custo das etapas já executadas se perdia.
+Agora é gravado sempre (`try/finally`).
+
+### Primeira execução real (módulo Users, 08/10/2026)
+
+`SAIDA_DIR=saida/execucoes/20261008 python3 main.py --nome Users --arquivo exemplos/erp/modulos/users.md`
+(log em `saida/execucoes/20261008.log`)
+
+| Etapa | Resultado |
+|---|---|
+| Requisitos, Esclarecedor, Modelador, Arquiteto | aprovados na 1ª tentativa |
+| Planejador da base | aprovado na 1ª tentativa |
+| Implementador backend da base, lotes 1–5 | aprovados; o lote 3 precisou de 2 tentativas |
+| Implementador backend da base, lote 6 | **reprovado nas 2 tentativas** → pipeline parou |
+
+Foram 13 invocações no total e 25 arquivos de código gravados (todos já
+validados). A parada mostra que os limites funcionam: o lote reprovado não foi
+gravado e não houve novas tentativas além do limite.
+
+**Causa da falha:** o Gemini escreveu o conteúdo correto de `OutboxPublisher`, mas
+com o `path` de outro arquivo do lote (`OutboxProcessorService.java`). O resultado
+foi um arquivo em duplicidade e outro faltando. O mesmo padrão aconteceu no lote 3
+e foi corrigido no retry; no lote 6, o modelo repetiu o erro mesmo com a mensagem
+de reprovação.
+
+**Correção sugerida (não implementada):** reparo determinístico antes de validar.
+Quando o tipo declarado num arquivo corresponde exatamente a um arquivo pedido e
+não entregue, do mesmo pacote, o `path` seria corrigido em código. A alternativa
+é reduzir `IMPL_LOTE`, para haver menos arquivos parecidos no mesmo lote.
+
+Os próximos passos (Planejador do módulo, implementador do módulo e frontend) não
+chegaram a rodar.
 
 ---
 
