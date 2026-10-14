@@ -9,7 +9,8 @@ Cada etapa:
   1. invoca o agente (saída estruturada Pydantic);
   2. valida em código (validation.py);
   3. se falhar, re-executa com os erros anexados (até MAX_TENTATIVAS);
-  4. grava o artefato em saida/<modulo>/ antes de seguir.
+  4. publica o artefato aprovado no ambiente compartilhado (ambiente.py),
+     em saida/<modulo>/, antes de seguir.
 
 As etapas de implementação estão em implementacao.py. O código gerado vai para
 <codigo_dir>/backend e <codigo_dir>/frontend.
@@ -23,26 +24,18 @@ from langsmith import get_current_run_tree, traceable
 import implementacao
 import layout
 import validation
+from ambiente import ARTEFATOS, Ambiente
 from config import CONTEXTO_PADRAO, MAX_TENTATIVAS, SAIDA_DIR
 from execucao import PipelineError, executar_agente
 from layout import slugify
 from render import renderizar_relatorio
-from schemas import (FinalSpecification, ImplementationPlan, ModuleAnalysis,
-                     ModuleArchitecture, ModuleDataModel, ProjectContext)
+from schemas import ImplementationPlan, ProjectContext
 from system_prompts import templates
 
 ETAPAS = ("requisitos", "esclarecedor", "modelador_dados", "arquiteto_software",
           "planejador", "implementador_backend", "implementador_frontend")
 ETAPAS_ESPECIFICACAO = ETAPAS[:4]
 
-# etapa -> (chave em artefatos, arquivo, schema)
-ARTEFATOS = {
-    "requisitos": ("analise", "1_analise.json", ModuleAnalysis),
-    "esclarecedor": ("especificacao", "2_especificacao.json", FinalSpecification),
-    "modelador_dados": ("modelo_dados", "3_modelo_dados.json", ModuleDataModel),
-    "arquiteto_software": ("arquitetura", "4_arquitetura.json", ModuleArchitecture),
-    "planejador": ("plano", "5_plano.json", ImplementationPlan),
-}
 # artefato -> etapas que o consomem
 CONSUMIDORES = {
     "analise": ("esclarecedor",),
@@ -62,10 +55,6 @@ def carregar_contexto(caminho: str = CONTEXTO_PADRAO) -> ProjectContext:
     return ProjectContext.model_validate_json(Path(caminho).read_text(encoding="utf-8"))
 
 
-def _salvar(pasta: Path, nome: str, obj) -> None:
-    (pasta / nome).write_text(obj.model_dump_json(indent=2), encoding="utf-8")
-
-
 def criar_agentes(contexto: ProjectContext) -> dict:
     from agents import (arquiteto_software, esclarecedor, implementador_backend,
                         implementador_frontend, modelador_de_dados, planejador,
@@ -79,6 +68,10 @@ def criar_agentes(contexto: ProjectContext) -> dict:
         "implementador_backend": implementador_backend.get_agente(contexto),
         "implementador_frontend": implementador_frontend.get_agente(contexto),
     }
+
+
+def _caminhos(manifesto) -> list:
+    return [m["path"] for m in manifesto if "path" in m]
 
 
 def lado_final(ate: str) -> Optional[str]:
@@ -105,6 +98,7 @@ def processar_modulo(
     codigo_dir: Optional[str] = None,
     numero_migracao: int = 1,
     endpoints_externos: Optional[Set[str]] = None,
+    ambiente: Optional[Ambiente] = None,
 ) -> dict:
     """Roda o pipeline de um módulo e devolve os artefatos produzidos.
 
@@ -114,6 +108,8 @@ def processar_modulo(
     - `plano_base`: base compartilhada já pronta (modo projeto). Sem ela, a base
       é gerada em saida/<modulo>/base/ quando alguma etapa de implementação roda.
     - `codigo_dir`: onde gravar o código (padrão: saida/<modulo>/codigo).
+    - `ambiente`: ambiente compartilhado do projeto. Sem ele, cria um só para
+      este módulo (saida/<modulo>/, com base e código dentro dessa pasta).
     - `agentes` permite injetar agentes falsos em testes.
     """
     for nome_param, valor in (("ate", ate), ("de", de)):
@@ -135,9 +131,14 @@ def processar_modulo(
     if agentes is None:
         agentes = criar_agentes(contexto)
 
-    pasta = Path(saida_dir) / slugify(nome)
-    pasta.mkdir(parents=True, exist_ok=True)
-    codigo = Path(codigo_dir) if codigo_dir else pasta / "codigo"
+    if ambiente is None:
+        pasta = Path(saida_dir) / slugify(nome)
+        ambiente = Ambiente(Path(saida_dir), contexto,
+                            codigo=Path(codigo_dir) if codigo_dir else pasta / "codigo",
+                            base=pasta / "base", registro=pasta / "ambiente.jsonl")
+    amb = ambiente
+    pasta = amb.pasta_modulo(nome)
+    codigo = amb.codigo
     metricas: dict = {}
     if de != ETAPAS[0] and (pasta / "metricas.json").exists():
         metricas = json.loads((pasta / "metricas.json").read_text())
@@ -150,13 +151,14 @@ def processar_modulo(
     for etapa in ETAPAS[:ETAPAS.index(de)]:
         if etapa not in ARTEFATOS:
             continue
-        chave, arquivo, schema = ARTEFATOS[etapa]
-        caminho = pasta / arquivo
-        if caminho.exists():
-            artefatos[chave] = schema.model_validate_json(caminho.read_text(encoding="utf-8"))
+        chave = ARTEFATOS[etapa][0]
+        obj = amb.artefato(nome, chave)
+        if obj is not None:
+            artefatos[chave] = obj
         elif any(roda(e) for e in CONSUMIDORES[chave]):
             raise PipelineError(
-                f"Para começar em '{de}' é preciso {caminho} (etapa '{etapa}').")
+                f"Para começar em '{de}' é preciso {amb.caminho_artefato(nome, chave)} "
+                f"(etapa '{etapa}').")
 
     def falhar(etapa, erros, obj):
         (pasta / f"{etapa}.invalido.json").write_text(
@@ -174,9 +176,8 @@ def processar_modulo(
                                      metricas, max_tentativas, modulo=nome)
         if erros:
             falhar(etapa, erros, obj)
-        chave, arquivo, _ = ARTEFATOS[etapa]
-        _salvar(pasta, arquivo, obj)
-        artefatos[chave] = obj
+        amb.publicar(nome, etapa, obj)
+        artefatos[ARTEFATOS[etapa][0]] = obj
         return obj
 
     # 1) Requisitos -------------------------------------------------------
@@ -210,7 +211,7 @@ def processar_modulo(
 
     try:
         return _etapas_de_implementacao(
-            nome, contexto, artefatos, agentes, pasta, codigo, metricas, ate, roda,
+            nome, contexto, artefatos, agentes, amb, pasta, codigo, metricas, ate, roda,
             falhar, plano_base, numero_migracao, outros_modulos, endpoints_externos,
             max_tentativas)
     finally:
@@ -218,7 +219,7 @@ def processar_modulo(
         (pasta / "metricas.json").write_text(json.dumps(metricas, indent=2))
 
 
-def _etapas_de_implementacao(nome, contexto, artefatos, agentes, pasta, codigo,
+def _etapas_de_implementacao(nome, contexto, artefatos, agentes, amb, pasta, codigo,
                              metricas, ate, roda, falhar, plano_base,
                              numero_migracao, outros_modulos, endpoints_externos,
                              max_tentativas) -> dict:
@@ -226,8 +227,9 @@ def _etapas_de_implementacao(nome, contexto, artefatos, agentes, pasta, codigo,
     if any(roda(e) for e in ETAPAS[4:]) and plano_base is None:
         arq = artefatos.get("arquitetura")
         plano_base = implementacao.garantir_base(
-            contexto, [nome], pasta / "base", codigo, agentes, lado_final(ate),
-            max_tentativas, arquiteturas={nome: arq} if arq else None)
+            contexto, [nome], amb.base, codigo, agentes, lado_final(ate),
+            max_tentativas, arquiteturas={nome: arq} if arq else None,
+            ambiente=amb)
 
     # 5) Planejador ------------------------------------------------------
     if roda("planejador"):
@@ -238,7 +240,7 @@ def _etapas_de_implementacao(nome, contexto, artefatos, agentes, pasta, codigo,
             agentes["planejador"], metricas, max_tentativas)
         if erros:
             falhar("planejador", erros, plano)
-        _salvar(pasta, "5_plano.json", plano)
+        amb.publicar(nome, "planejador", plano)
         artefatos["plano"] = plano
 
     # 6) Implementador backend -------------------------------------------
@@ -249,6 +251,7 @@ def _etapas_de_implementacao(nome, contexto, artefatos, agentes, pasta, codigo,
             artefatos["arquitetura"], artefatos["plano"], plano_base, numero_migracao,
             codigo, pasta, agentes["implementador_backend"], metricas, max_tentativas)
         (pasta / "6_backend.json").write_text(json.dumps(manifesto, indent=2))
+        amb.registrar("implementador_backend", "codigo", nome, _caminhos(manifesto))
         artefatos["arquivos_backend"] = manifesto
 
     # 7) Implementador frontend ------------------------------------------
@@ -261,6 +264,7 @@ def _etapas_de_implementacao(nome, contexto, artefatos, agentes, pasta, codigo,
                 plano, plano_base, endpoints_externos or set(), codigo, pasta,
                 agentes["implementador_frontend"], metricas, max_tentativas)
             (pasta / "7_frontend.json").write_text(json.dumps(manifesto, indent=2))
+            amb.registrar("implementador_frontend", "codigo", nome, _caminhos(manifesto))
             artefatos["arquivos_frontend"] = manifesto
         else:
             print(f"[7/7] implementador_frontend — sem frontend para {nome}, pulado")

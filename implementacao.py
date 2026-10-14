@@ -16,6 +16,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 import layout
 import validation
+from ambiente import LADOS, caminhos_em_disco
 from assinaturas import assinaturas
 from config import IMPL_LIMITE_CONTEXTO, IMPL_LOTE, MAX_TENTATIVAS
 from ddl import gerar_ddl, usa_sql
@@ -25,18 +26,8 @@ from schemas import (FinalSpecification, GeneratedFiles, ImplementationPlan,
                      ProjectContext)
 from system_prompts import templates
 
-LADOS = ("backend", "frontend")
-_IGNORAR = {"node_modules", "target", "build", "dist", ".git", ".gradle", ".idea"}
-
 
 # ------------------------------------------------------------- disco
-def caminhos_em_disco(raiz: Path) -> Set[str]:
-    if not raiz.exists():
-        return set()
-    return {p.relative_to(raiz).as_posix() for p in raiz.rglob("*")
-            if p.is_file() and not _IGNORAR & set(p.relative_to(raiz).parts)}
-
-
 def _destino(raiz: Path, caminho: str) -> Path:
     motivo = layout.caminho_invalido(caminho)
     destino = (raiz / caminho).resolve()
@@ -307,6 +298,7 @@ def garantir_base(
     max_tentativas: int = MAX_TENTATIVAS,
     metricas: Optional[dict] = None,
     arquiteturas: Optional[Dict[str, ModuleArchitecture]] = None,
+    ambiente=None,
 ) -> ImplementationPlan:
     """Planeja e implementa a base (o que ainda não existir em `pasta`).
 
@@ -315,6 +307,7 @@ def garantir_base(
     mensagem (ex.: login) e na validação; sem nenhuma, a base não tem as URLs
     da API checadas.
     Artefatos: <pasta>/5_plano.json, 6_backend.json, 7_frontend.json.
+    `ambiente`: se informado, cada publicação da base vai para o registro dele.
     """
     pasta.mkdir(parents=True, exist_ok=True)
     metricas = {} if metricas is None else metricas
@@ -340,6 +333,8 @@ def garantir_base(
             raise PipelineError("Plano da base não passou na validação:\n- "
                                 + "\n- ".join(erros))
         arq_plano.write_text(plano.model_dump_json(indent=2), encoding="utf-8")
+        if ambiente:
+            ambiente.registrar("planejador", "plano_base", "base", [arq_plano.name])
 
     if ate_lado is None:
         _salvar_json(pasta / "metricas.json", metricas)
@@ -347,7 +342,7 @@ def garantir_base(
     try:
         _implementar_base(contexto, modulos, pasta, codigo_dir, agentes, ate_lado,
                           max_tentativas, metricas, plano, rotas, front,
-                          arquiteturas or {})
+                          arquiteturas or {}, ambiente)
     finally:
         _salvar_json(pasta / "metricas.json", metricas)  # mesmo se falhar
     return plano
@@ -355,7 +350,8 @@ def garantir_base(
 
 def _implementar_base(contexto, modulos, pasta, codigo_dir, agentes, ate_lado,
                       max_tentativas, metricas, plano, rotas, front,
-                      arquiteturas: Dict[str, ModuleArchitecture]) -> None:
+                      arquiteturas: Dict[str, ModuleArchitecture],
+                      ambiente=None) -> None:
     lados = LADOS[: LADOS.index(ate_lado) + 1]
     endpoints = [e for a in arquiteturas.values() for e in a.endpoints]
     conhecidos_api = ({validation.normalizar_rota(e.path) for e in endpoints}
@@ -376,6 +372,9 @@ def _implementar_base(contexto, modulos, pasta, codigo_dir, agentes, ate_lado,
                 endpoints=conhecidos_api),
             pasta, metricas, max_tentativas, "base")
         _salvar_json(manifesto_arq, manifesto)
+        if ambiente:
+            ambiente.registrar(f"implementador_{lado}", "codigo", "base",
+                               [m["path"] for m in manifesto if "path" in m])
 
 
 # ------------------------------------------------------------- módulo

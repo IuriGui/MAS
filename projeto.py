@@ -3,18 +3,20 @@
    -> pipeline de cada módulo na ordem de build_order.
 
 Cada módulo recebe o PROJECT CONTEXT e um resumo dos outros módulos que inclui
-os serviços públicos e eventos já projetados pelos módulos anteriores. O código
-de todos os módulos vai para saida/<projeto>/codigo/{backend,frontend}.
+os serviços públicos e eventos já publicados no ambiente compartilhado
+(ambiente.py) pelos módulos anteriores. O código de todos os módulos vai para
+saida/<projeto>/codigo/{backend,frontend}.
 """
 import json
 import re
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from langsmith import traceable
 
 import implementacao
 import validation
+from ambiente import Ambiente
 from config import MAX_TENTATIVAS, SAIDA_DIR, VALIDAR
 from pipeline import (ETAPAS, PipelineError, _executar, carregar_contexto,
                       lado_final, processar_modulo, slugify)
@@ -92,7 +94,7 @@ def gerar_contexto(
         raise PipelineError(
             f"Arquiteto-chefe não passou na validação após {max_tentativas} "
             "tentativas:\n- " + "\n- ".join(erros))
-    (pasta / "0_contexto.json").write_text(contexto.model_dump_json(indent=2), encoding="utf-8")
+    Ambiente(pasta).publicar_contexto(contexto)
     (pasta / "contexto.md").write_text(render_contexto(nome_projeto, contexto), encoding="utf-8")
     return contexto
 
@@ -144,20 +146,21 @@ def processar_projeto(
         if desconhecidos:
             raise PipelineError(f"Módulos não existem no contexto: {sorted(desconhecidos)}")
 
-    codigo = pasta / "codigo"
+    amb = Ambiente(pasta, contexto)
+    codigo = amb.codigo
     plano_base = None
-    arquiteturas: Dict[str, object] = _arquiteturas_existentes(pasta, contexto)
+    # Arquiteturas de execuções anteriores (se houver) ajudam a base (ex.: login)
+    arquiteturas = amb.arquiteturas()
     implementa = ETAPAS.index(ate) >= ETAPAS.index("planejador")
     if implementa:
         agentes_base = fabrica_agentes(contexto) if fabrica_agentes else None
         if agentes_base is None:
             from pipeline import criar_agentes
             agentes_base = criar_agentes(contexto)
-        # Endpoints de execuções anteriores (se houver) ajudam a base (ex.: login)
         plano_base = implementacao.garantir_base(
-            contexto, list(contexto.build_order), pasta / "base", codigo,
+            contexto, list(contexto.build_order), amb.base, codigo,
             agentes_base, lado_final(ate), max_tentativas,
-            arquiteturas=arquiteturas or None)
+            arquiteturas=arquiteturas or None, ambiente=amb)
 
     status: Dict[str, dict] = {}
     for numero, nome in enumerate(contexto.build_order, 1):
@@ -165,24 +168,21 @@ def processar_projeto(
             continue
         descricao = _descricao_modulo(nome, modulos_dir, declarados, entradas)
         print(f"\n=== Módulo {nome} ===")
-        externos = {e.path for n, a in arquiteturas.items() if n != nome
-                    for e in a.endpoints}
         try:
             res = processar_modulo(
                 nome, descricao,
-                outros_modulos=templates.resumo_outros_modulos(contexto, nome, arquiteturas),
+                outros_modulos=templates.resumo_outros_modulos(
+                    contexto, nome, amb.arquiteturas()),
                 ate=ate, de=de,
                 agentes=fabrica_agentes(contexto) if fabrica_agentes else None,
                 saida_dir=str(pasta), max_tentativas=max_tentativas,
                 contexto=contexto, plano_base=plano_base,
                 codigo_dir=str(codigo), numero_migracao=numero,
-                endpoints_externos=externos)
+                endpoints_externos=amb.endpoints_de_outros(nome), ambiente=amb)
         except PipelineError as e:
             print(f"  FALHA em {nome}: {e}")
             status[nome] = {"status": "falhou", "erro": str(e)}
             continue
-        if "arquitetura" in res:
-            arquiteturas[nome] = res["arquitetura"]
         spec = res.get("especificacao")
         status[nome] = {
             "status": "ok",
@@ -200,18 +200,6 @@ def processar_projeto(
         "modulos": status,
     })
     return {"pasta": str(pasta), "contexto": contexto, "modulos": status}
-
-
-def _arquiteturas_existentes(pasta: Path, contexto: ProjectContext) -> Dict[str, object]:
-    """Arquiteturas já geradas em execuções anteriores (úteis com --apenas/--de)."""
-    from schemas import ModuleArchitecture
-    achadas = {}
-    for nome in contexto.build_order:
-        arq = pasta / slugify(nome) / "4_arquitetura.json"
-        if arq.exists():
-            achadas[nome] = ModuleArchitecture.model_validate_json(
-                arq.read_text(encoding="utf-8"))
-    return achadas
 
 
 def _descricao_modulo(nome, modulos_dir, declarados, entradas) -> str:

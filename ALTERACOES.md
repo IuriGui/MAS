@@ -1,11 +1,52 @@
 # Alterações
 
+- [Rodada 7 — F1: ambiente compartilhado](#rodada-7--f1-ambiente-compartilhado)
 - [Rodada 6 — F0: linha de base para o sistema multiagente](#rodada-6--f0-linha-de-base-para-o-sistema-multiagente)
 - [Rodada 5 — Regeneração do módulo e aplicação no ar](#rodada-5--regeneração-do-módulo-e-aplicação-no-ar)
 - [Rodada 4 — Execução completa, compilação do código gerado e correções](#rodada-4--execução-completa-compilação-do-código-gerado-e-correções)
 - [Rodada 3 — Limites contra repetição sem fim e primeira execução real](#rodada-3--limites-contra-repetição-sem-fim-e-primeira-execução-real)
 - [Rodada 2 — Planejador e Implementadores (backend e frontend)](#rodada-2--planejador-e-implementadores-backend-e-frontend)
 - [Rodada 1 — Integração do Arquiteto-chefe e execução por projeto](#rodada-1--integração-do-arquiteto-chefe-e-execução-por-projeto)
+
+---
+
+## Rodada 7 — F1: ambiente compartilhado
+
+Data: 14/10/2026.
+
+Segunda fase do plano. Ela cria o ambiente compartilhado que a IBM descreve como
+meio de comunicação indireta: um agente modifica o ambiente e os outros percebem
+a modificação. Os agentes ainda não leem o ambiente. Isso vem na F2, com as tools.
+
+### `ambiente.py`
+- **`Ambiente`** é o quadro do projeto. Ele guarda o PROJECT CONTEXT, os artefatos de
+  cada módulo, os contratos publicados (serviços públicos, eventos e endpoints) e
+  o código gerado. O disco continua sendo a única fonte da verdade, com o mesmo
+  layout de antes.
+- **Só o orquestrador escreve**, com `publicar_contexto`, `publicar` e `registrar`, e
+  só saídas aprovadas na validação. Cada escrita vai para `ambiente.jsonl`, com
+  autor, tipo, módulo, alvos e horário. A base compartilhada também é registrada.
+- **`Leitura`** é a visão só de leitura para os agentes: contexto, artefatos,
+  contratos, lista de arquivos, conteúdo e assinaturas públicas. Ela devolve texto
+  e mensagens em inglês, e recusa caminhos que saem da raiz do código. As tools da
+  F2 serão uma camada fina sobre ela.
+
+### O que mudou no orquestrador
+- `pipeline.py` publica e lê artefatos pelo ambiente. A tabela `ARTEFATOS` passou
+  para `ambiente.py`.
+- `projeto.py` usa um único ambiente para o projeto todo. Os contratos dos outros
+  módulos são lidos do ambiente a cada módulo, em vez de ficarem num dicionário em
+  memória. `_arquiteturas_existentes` foi removida.
+- `implementacao.caminhos_em_disco` passou para `ambiente.py`.
+
+### Verificação
+Uma execução do projeto com agentes falsos, no código anterior e no novo, gerou os
+mesmos 59 arquivos com o mesmo conteúdo. O `ambiente.jsonl` é a única novidade.
+
+**Uma diferença de comportamento:** se um módulo falha depois do Arquiteto de
+software (por exemplo, no Planejador), a arquitetura dele já foi aprovada e
+publicada. Os módulos seguintes passam a vê-la como contrato. Antes, ela só entrava
+no resumo dos outros módulos se o módulo inteiro terminasse.
 
 ---
 

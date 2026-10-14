@@ -54,11 +54,13 @@ Para testar prompts, prefira `--ate planejador` primeiro.
 
 Saída do projeto em `saida/<projeto>/`: `0_contexto.json`, `contexto.md`,
 `projeto.json` (status de cada módulo), `base/` (plano e manifestos da base),
-`codigo/backend` e `codigo/frontend` (código de todos os módulos) e uma pasta por módulo.
+`codigo/backend` e `codigo/frontend` (código de todos os módulos), `ambiente.jsonl`
+(registro de cada publicação no ambiente compartilhado: quem, o quê, quando) e uma
+pasta por módulo.
 Saída de cada módulo: `1_analise.json`, `2_especificacao.json`,
 `3_modelo_dados.json`, `4_arquitetura.json`, `5_plano.json`, `6_backend.json` e
 `7_frontend.json` (arquivos gerados), `relatorio.md` e `metricas.json`.
-Rodando um módulo sozinho, a base e o código ficam em `saida/<modulo>/base` e `saida/<modulo>/codigo`.
+Rodando um módulo sozinho, a base, o código e o `ambiente.jsonl` ficam em `saida/<modulo>/`.
 
 ## Entradas
 - **Descrição do sistema** (`exemplos/erp/sistema.md`): texto livre com uma seção
@@ -71,6 +73,8 @@ Rodando um módulo sozinho, a base e o código ficam em `saida/<modulo>/base` e 
 - `agents/` um agente por arquivo (`get_agente(contexto)`)
 - `schemas.py` contratos entre agentes · `validation.py` regras em código
 - `projeto.py` Arquiteto-chefe + base + vários módulos · `pipeline.py` um módulo
+- `ambiente.py` ambiente compartilhado: o orquestrador publica o que foi aprovado;
+  os agentes leem pela fachada `Leitura` (base das tools da F2)
 - `implementacao.py` Planejador, Implementadores (lotes), base compartilhada
 - `ddl.py` migration a partir do modelo · `layout.py` onde cada arquivo pode morar
 - `assinaturas.py` assinaturas públicas de arquivos (contexto dos Implementadores)
