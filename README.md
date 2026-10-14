@@ -37,6 +37,17 @@ partir de uma etapa lendo do disco os artefatos anteriores.
 `VALIDAR=0` desliga a validação em código (útil para depurar prompts).
 `IMPL_LOTE` (padrão 5) define quantos arquivos cada chamada de Implementador gera.
 
+### Linha de base (F0)
+```bash
+python -m scripts.linha_de_base --n 3                          # 3 execuções do projeto + resumo
+python -m scripts.linha_de_base --n 3 --ate arquiteto_software # só especificação (mais barato)
+python -m scripts.linha_de_base --so-agregar                   # só refaz o resumo
+```
+Cada execução vai para `saida/linha_de_base/execucao_NN/` com um `execucao.json`
+(commit, modelo, configuração, tempo). O resumo fica em `resumo.md` e `resumo.json`,
+com média e desvio por etapa, sucesso por módulo e as regras de validação que mais
+reprovaram. As fichas dos agentes no modelo da IBM estão em `docs/fichas_agentes.md`.
+
 **Custo:** as etapas de implementação fazem uma chamada por lote de arquivos.
 Um módulo como Users pode passar de 10 chamadas de ~20–30 mil tokens de entrada.
 Para testar prompts, prefira `--ate planejador` primeiro.
@@ -64,6 +75,8 @@ Rodando um módulo sozinho, a base e o código ficam em `saida/<modulo>/base` e 
 - `ddl.py` migration a partir do modelo · `layout.py` onde cada arquivo pode morar
 - `assinaturas.py` assinaturas públicas de arquivos (contexto dos Implementadores)
 - `execucao.py` invoca agente + valida + nova tentativa
+- `metricas.py` métricas por etapa (tentativas, reprovações, regras, tools) e agregação
+  de execuções · `scripts/linha_de_base.py` linha de base (F0)
 - `render.py` JSON → markdown
 - `tools/` tools de arquivo (não usadas pelo pipeline; demo em `scripts/`)
 - `tests/` testes sem chamar LLM (agentes falsos em `tests/fakes.py`)

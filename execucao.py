@@ -5,6 +5,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from langgraph.errors import GraphRecursionError
 from pydantic import BaseModel
 
+import metricas as med
 from config import LIMITE_PASSOS_AGENTE, VALIDAR
 from layout import slugify
 
@@ -56,15 +57,16 @@ def executar_agente(
         obj_tentativa = resultado["structured_response"]
 
         tk = _tokens(resultado)
-        m = metricas.setdefault(nome_etapa, {"tentativas": 0, "segundos": 0.0,
-                                             "input_tokens": 0, "output_tokens": 0})
+        m = med.da_etapa(metricas, nome_etapa)
         m["tentativas"] += 1
         m["segundos"] = round(m["segundos"] + time.time() - t0, 2)
         m["input_tokens"] += tk["input_tokens"]
         m["output_tokens"] += tk["output_tokens"]
+        m["chamadas_tool"] += med.chamadas_tool(resultado)
 
         if obj_tentativa is None:
             erros = ["A resposta não seguiu o formato estruturado exigido (JSON do schema)."]
+            m["sem_saida"] += 1
             print(f"  [{nome_etapa}] tentativa {tentativa}: sem saída estruturada")
         else:
             obj = obj_tentativa
@@ -73,6 +75,8 @@ def executar_agente(
             erros = validar(obj) if VALIDAR else []
             if not erros:
                 return obj, []
+            m["reprovadas"] += 1
+            med.registrar_erros(m, erros)
             print(f"  [{nome_etapa}] tentativa {tentativa} reprovada na validação: {erros}")
         prompt = (
             mensagem
@@ -80,6 +84,7 @@ def executar_agente(
             "Gere novamente corrigindo TODOS os pontos abaixo:\n- "
             + "\n- ".join(erros)
         )
+    med.da_etapa(metricas, nome_etapa)["falhas_finais"] += 1
     if obj is None:
         raise PipelineError(
             f"Etapa '{nome_etapa}': o modelo não produziu saída estruturada em "

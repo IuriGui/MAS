@@ -133,12 +133,12 @@ def test_modelo_pk_deve_ser_uuid():
 
 def test_modelo_fk_externa_proibida():
     erros = validation.validar_modelo_dados(modelo(ref="customers.id"), spec())
-    assert any("não pertence a este módulo" in e for e in erros)
+    assert any("does not belong to this module" in e for e in erros)
 
 
 def test_modelo_fk_coluna_inexistente():
     erros = validation.validar_modelo_dados(modelo(ref="roles.codigo"), spec())
-    assert any("coluna inexistente" in e for e in erros)
+    assert any("nonexistent column" in e for e in erros)
 
 
 def test_modelo_reference_string_null_e_ignorada():

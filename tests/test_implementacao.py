@@ -98,7 +98,7 @@ def test_modelo_restricao_que_nao_e_sql():
     m.entities[0].constraints.append("email deve ser único por tenant")
     m.entities[0].columns[-1].constraints.append("must be lowercase")
     erros = validation.validar_modelo_dados(m, spec())
-    assert any("não é SQL" in e and "users" in e for e in erros)
+    assert any("is not SQL" in e and "users" in e for e in erros)
     assert any("users.email" in e for e in erros)
 
 
@@ -136,7 +136,7 @@ def test_plano_endpoint_sem_controller_e_endpoint_inventado():
     ctrl.endpoints = ["DELETE /api/v1/users/{id}"]
     erros = validar_plano(p)
     assert any("'controller'" in e and "GET /api/v1/users" in e for e in erros)
-    assert any("fora da arquitetura" in e for e in erros)
+    assert any("outside the architecture" in e for e in erros)
 
 
 def test_plano_caminhos_fora_do_modulo_e_migration():
@@ -146,10 +146,10 @@ def test_plano_caminhos_fora_do_modulo_e_migration():
     p.frontend_files.append(arq("src/modules/outro/X.tsx", "component"))
     p.backend_files.append(arq("../fora.java", "other"))
     erros = validar_plano(p)
-    assert any("com/outra/Coisa.java" in e and "fora da pasta" in e for e in erros)
-    assert any("não planeje migrations" in e for e in erros)
+    assert any("com/outra/Coisa.java" in e and "outside the module folder" in e for e in erros)
+    assert any("do not plan migrations" in e for e in erros)
     assert any("src/modules/outro/X.tsx" in e for e in erros)
-    assert any("../fora.java" in e and "inválido" in e for e in erros)
+    assert any("../fora.java" in e and "invalid path" in e for e in erros)
 
 
 def test_plano_depends_on_desconhecido_e_ciclo():
@@ -179,11 +179,11 @@ def test_plano_telas_e_rotas():
     p.frontend_files = [f for f in p.frontend_files if f.kind != "api_client"]
     p.frontend_files = [f for f in p.frontend_files if f.kind != "routes"]
     erros = validar_plano(p)
-    assert any("Rotas de tela repetidas" in e for e in erros)
+    assert any("Repeated screen routes" in e for e in erros)
     assert any("Nada.tsx" in e for e in erros)
     assert any("'api_client'" in e for e in erros)
     assert any("FR77" in e for e in erros)
-    assert any("arquivo de rotas" in e for e in erros)
+    assert any("routes file" in e for e in erros)
 
 
 def test_plano_servico_publico_e_evento_exportados():
@@ -200,7 +200,7 @@ def test_plano_sem_frontend_no_contexto():
     c = ctx_sem_frontend()
     assert validar_plano(plano(com_frontend=False), c, plano_base(False)) == []
     erros = validar_plano(plano(), c, plano_base(False))
-    assert any("não tem frontend" in e for e in erros)
+    assert any("has no frontend" in e for e in erros)
 
 
 # ================================================================ plano da base
@@ -218,7 +218,7 @@ def test_plano_base_invade_modulo_e_sql():
     p.backend_files.append(arq("src/main/resources/db/migration/V1__x.sql", "config"))
     p.conventions = []
     erros = validation.validar_plano_base(p, carregar_contexto(), MODULOS)
-    assert any("users/Coisa.java" in e and "pasta de módulo" in e for e in erros)
+    assert any("users/Coisa.java" in e and "module folder" in e for e in erros)
     assert any("src/modules/users/routes.tsx" in e for e in erros)
     assert any("V0__" in e for e in erros)
     assert any("conventions" in e for e in erros)
@@ -275,8 +275,8 @@ def test_arquivos_faltando_e_extra():
     pedidos = p.backend_files[:2]
     g = gerar(p.backend_files[0], p.backend_files[3])
     erros = validation.validar_arquivos(g, pedidos, conhecidos())
-    assert any("não entregues" in e and "Role.java" in e for e in erros)
-    assert any("não foram pedidos" in e for e in erros)
+    assert any("not delivered" in e and "Role.java" in e for e in erros)
+    assert any("not requested" in e for e in erros)
 
 
 def test_arquivos_java_pacote_classe_import_e_tabela():
@@ -310,7 +310,7 @@ def test_arquivos_placeholder():
     f = plano().backend_files[0]
     g = gerar(f)
     g.files[0].content += "// TODO implementar\n"
-    assert any("incompleto" in e for e in validation.validar_arquivos(g, [f], conhecidos()))
+    assert any("incomplete" in e for e in validation.validar_arquivos(g, [f], conhecidos()))
 
 
 def test_arquivos_front_import_e_endpoint():
@@ -389,7 +389,7 @@ def test_implementador_retry(tmp_path):
                            saida_dir=str(tmp_path))
     m = res["metricas"]["implementador_backend"]
     assert m["tentativas"] == m["lotes"] + 1
-    assert any("REPROVADA" in c and "não entregues" in c for c in back.chamadas)
+    assert any("REPROVADA" in c and "not delivered" in c for c in back.chamadas)
 
 
 def test_implementador_falha_definitiva(tmp_path):
@@ -518,7 +518,7 @@ def test_reparo_saida_real_do_gemini():
     k = validation.Conhecidos(caminhos={f.path for f in p.backend_files},
                               pacote_base="com.distributor.erp.")
     antes = validation.validar_arquivos(g, lote, k)
-    assert any("não entregues" in e for e in antes)
+    assert any("not delivered" in e for e in antes)
 
     implementacao.reparar_caminhos(g, lote)
     assert validation.validar_arquivos(g, lote, k) == []

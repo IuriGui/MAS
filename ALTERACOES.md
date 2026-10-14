@@ -1,10 +1,45 @@
 # Alterações
 
+- [Rodada 6 — F0: linha de base para o sistema multiagente](#rodada-6--f0-linha-de-base-para-o-sistema-multiagente)
 - [Rodada 5 — Regeneração do módulo e aplicação no ar](#rodada-5--regeneração-do-módulo-e-aplicação-no-ar)
 - [Rodada 4 — Execução completa, compilação do código gerado e correções](#rodada-4--execução-completa-compilação-do-código-gerado-e-correções)
 - [Rodada 3 — Limites contra repetição sem fim e primeira execução real](#rodada-3--limites-contra-repetição-sem-fim-e-primeira-execução-real)
 - [Rodada 2 — Planejador e Implementadores (backend e frontend)](#rodada-2--planejador-e-implementadores-backend-e-frontend)
 - [Rodada 1 — Integração do Arquiteto-chefe e execução por projeto](#rodada-1--integração-do-arquiteto-chefe-e-execução-por-projeto)
+
+---
+
+## Rodada 6 — F0: linha de base para o sistema multiagente
+
+Data: 14/10/2026.
+
+Primeira fase do plano para tornar o pipeline um sistema multiagente, com base nas
+definições da IBM. Esta fase não muda o comportamento dos agentes. Ela só mede o
+sistema atual, para que as fases seguintes tenham com o que ser comparadas.
+
+### Métricas novas por etapa (`metricas.py`, registradas em `execucao.py`)
+- `reprovadas`: tentativas reprovadas na validação em código.
+- `sem_saida`: tentativas sem saída estruturada.
+- `falhas_finais`: vezes em que a etapa (ou um lote) esgotou as tentativas.
+- `chamadas_tool`: tool calls do agente, fora a da saída estruturada. Hoje é sempre 0.
+- `erros_por_regra`: quantas vezes cada regra de `validation.py` reprovou uma saída.
+  A regra é a mensagem de erro sem os valores concretos (nomes, listas, números).
+
+Os campos antigos (`tentativas`, tokens, `segundos`, `lotes`) não mudaram. Métricas
+gravadas antes desta rodada ganham os campos novos ao serem retomadas.
+
+### Linha de base (`scripts/linha_de_base.py`)
+Roda o projeto N vezes com a mesma entrada, cada vez em
+`saida/linha_de_base/execucao_NN/`, e gera `resumo.md` e `resumo.json`. O resumo
+traz média e desvio por etapa, sucesso por módulo e as regras que mais reprovaram.
+
+### Fichas dos agentes (`docs/fichas_agentes.md`)
+Cada agente descrito pelos elementos da IBM (modelo, objetivo, ambiente, percepção,
+saída), com o resumo do que ainda falta para um sistema multiagente.
+
+### Mensagens de erro em inglês
+As mensagens de `validation.py`, que voltam aos agentes nas novas tentativas,
+passaram a ser em inglês, como os system prompts. Os testes foram ajustados.
 
 ---
 

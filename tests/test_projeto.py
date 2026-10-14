@@ -65,18 +65,18 @@ def test_contexto_ciclo():
     c = contexto()
     c.module_map[0].depends_on = ["Sales"]  # Users -> Sales -> Users
     erros = validation.validar_contexto(c, DECLARADOS)
-    assert any("circular" in e for e in erros)
+    assert any("Circular dependency" in e for e in erros)
 
 
 def test_contexto_build_order_fora_de_ordem():
     erros = validation.validar_contexto(
         contexto(build_order=["Sales", "Users", "Catalog"]), DECLARADOS)
-    assert any("antes de sua dependência" in e for e in erros)
+    assert any("before its dependency" in e for e in erros)
 
 
 def test_contexto_build_order_incompleto():
     erros = validation.validar_contexto(contexto(build_order=["Users", "Catalog"]), DECLARADOS)
-    assert any("não inclui" in e for e in erros)
+    assert any("does not include" in e for e in erros)
 
 
 def test_contexto_dependencia_inexistente():
@@ -116,7 +116,7 @@ def test_gerar_contexto_com_retry(tmp_path):
     chefe = AgenteFalso(contexto(build_order=["Users"]), contexto())
     c = gerar_contexto("loja", SISTEMA, tmp_path, agente=chefe)
     assert c.build_order == DECLARADOS
-    assert "não inclui" in chefe.chamadas[1]
+    assert "does not include" in chefe.chamadas[1]
     assert (tmp_path / "0_contexto.json").exists()
     assert (tmp_path / "contexto.md").exists()
 
