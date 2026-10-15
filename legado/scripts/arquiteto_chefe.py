@@ -1,7 +1,7 @@
 """Roda SÓ o Arquiteto-chefe sobre uma descrição de sistema.
 
-    python -m scripts.arquiteto_chefe                       # exemplos/erp/sistema.md
-    python -m scripts.arquiteto_chefe caminho/sistema.md
+    python -m legado.scripts.arquiteto_chefe                # exemplos/erp/sistema.md
+    python -m legado.scripts.arquiteto_chefe caminho/sistema.md
 
 Equivale a `python main.py --projeto <arquivo> --so-contexto`. A saída agora é
 estruturada (ProjectContext) e validada em código; vai para
@@ -16,7 +16,7 @@ from config import SAIDA_DIR
 from pipeline import slugify
 from projeto import gerar_contexto
 
-PADRAO = Path(__file__).resolve().parent.parent / "exemplos" / "erp" / "sistema.md"
+PADRAO = Path(__file__).resolve().parents[2] / "exemplos" / "erp" / "sistema.md"
 
 
 if __name__ == "__main__":

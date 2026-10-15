@@ -81,6 +81,18 @@ a validação só no orquestrador. Isso permite comparar as duas versões na F7.
   base, essa etapa usou ~4 mil de entrada no modo projeto. O custo maior era
   esperado, porque cada chamada reenvia o histórico, e precisa ser medido na F7.
 
+### Organização do repositório
+O que não faz parte do sistema multiagente foi movido para `legado/`, com
+`git mv`, e está descrito em `legado/README.md`:
+- `tools/manipulacao_de_arquivos.py`, substituído por `agents/ferramentas.py`;
+- `scripts/demo_file_tools.py`;
+- `scripts/arquiteto_chefe.py`, que equivale a `main.py --so-contexto`;
+- `exemplos/user.md`, cópia de `exemplos/erp/modulos/users.md`.
+
+Os exemplos de uso do README e do `main.py` passaram a apontar para
+`exemplos/erp/modulos/users.md`. Os scripts legados continuam rodando da raiz,
+com `python -m legado.scripts.<nome>`.
+
 ---
 
 ## Rodada 7 — F1: ambiente compartilhado

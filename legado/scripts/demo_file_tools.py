@@ -1,12 +1,12 @@
 """Demo antiga (agente.py) isolada: um agente com as tools de arquivo.
-Rode com:  python -m scripts.demo_file_tools
+Rode da raiz do repositório:  python -m legado.scripts.demo_file_tools
 """
 import time
 
 from langchain.agents import create_agent
 
 from config import MODEL
-from tools import manipulacao_de_arquivos
+from legado.tools import manipulacao_de_arquivos
 
 
 if __name__ == "__main__":

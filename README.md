@@ -28,9 +28,9 @@ python main.py --projeto exemplos/erp/sistema.md \
                --contexto saida/sistema/0_contexto.json --apenas Users,Catalog
 
 # Um módulo (usa exemplos/contexto_erp.json ou --contexto)
-python main.py --nome "Users" --arquivo exemplos/user.md                         # até o código
-python main.py --nome "Users" --arquivo exemplos/user.md --ate arquiteto_software # só especificação
-python main.py --nome "Users" --arquivo exemplos/user.md --de planejador          # reaproveita 1–4
+python main.py --nome "Users" --arquivo exemplos/erp/modulos/users.md                          # até o código
+python main.py --nome "Users" --arquivo exemplos/erp/modulos/users.md --ate arquiteto_software  # só especificação
+python main.py --nome "Users" --arquivo exemplos/erp/modulos/users.md --de planejador           # reaproveita 1–4
 ```
 `--ate` define a última etapa (padrão: `implementador_frontend`); `--de` retoma a
 partir de uma etapa lendo do disco os artefatos anteriores.
@@ -87,7 +87,7 @@ Rodando um módulo sozinho, a base, o código e o `ambiente.jsonl` ficam em `sai
 - `metricas.py` métricas por etapa (tentativas, reprovações, regras, tools) e agregação
   de execuções · `scripts/linha_de_base.py` linha de base (F0)
 - `render.py` JSON → markdown
-- `tools/` tools de arquivo (não usadas pelo pipeline; demo em `scripts/`)
+- `legado/` código anterior ao sistema multiagente, fora do pipeline (ver `legado/README.md`)
 - `tests/` testes sem chamar LLM (agentes falsos em `tests/fakes.py`)
 
 Mudanças recentes: ver `ALTERACOES.md`.

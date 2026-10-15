@@ -1,8 +1,8 @@
 """Uso:
   Um módulo (usa o PROJECT CONTEXT de exemplos/contexto_erp.json ou --contexto):
-    python main.py --nome "Users" --arquivo exemplos/user.md            # até o código
-    python main.py --nome "Users" --arquivo exemplos/user.md --ate arquiteto_software
-    python main.py --nome "Users" --arquivo exemplos/user.md --de planejador
+    python main.py --nome "Users" --arquivo exemplos/erp/modulos/users.md  # até o código
+    python main.py --nome "Users" --arquivo exemplos/erp/modulos/users.md --ate arquiteto_software
+    python main.py --nome "Users" --arquivo exemplos/erp/modulos/users.md --de planejador
     python main.py --nome "Inventory" --arquivo estoque.md --outros resumo_outros.md
 
   Projeto inteiro (Arquiteto-chefe + todos os módulos na ordem de construção):
