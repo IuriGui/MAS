@@ -196,6 +196,35 @@ def test_plano_servico_publico_e_evento_exportados():
     assert any("UserQueryService" in e for e in erros)
 
 
+def test_servico_publico_com_nome_qualificado_casa_com_export_simples():
+    """A arquitetura pode declarar o nome qualificado; o plano exporta o simples."""
+    a = arquitetura()
+    for metodo in ("findById", "findByIds"):  # duas operações da mesma interface
+        a.public_services.append(PublicService(
+            interface="com.distributor.erp.users.service.UserService", method=metodo,
+            parameters="UUID id", return_type="UserDto", purpose="p",
+            consumer_module="Sales"))
+    assert validation.validar_plano(plano(), "Usuários", spec(), modelo(), a,
+                                    carregar_contexto(), plano_base()) == []
+    a.public_services[-1].interface = "com.distributor.erp.users.service.Inexistente"
+    a.public_services.append(a.public_services[-1].model_copy())
+    erros = validation.validar_plano(plano(), "Usuários", spec(), modelo(), a,
+                                     carregar_contexto(), plano_base())
+    assert sum("Inexistente" in e for e in erros) == 1  # sem repetir a mensagem
+
+
+def test_export_qualificado_tambem_vale():
+    a = arquitetura()
+    a.public_services.append(PublicService(
+        interface="UserService", method="get", parameters="UUID id",
+        return_type="UserDto", purpose="p", consumer_module="Sales"))
+    pl = plano()
+    servico = next(f for f in pl.backend_files if f.kind == "service")
+    servico.exports = ["com.distributor.erp.users.service.UserService"]
+    assert validation.validar_plano(pl, "Usuários", spec(), modelo(), a,
+                                    carregar_contexto(), plano_base()) == []
+
+
 def test_plano_sem_frontend_no_contexto():
     c = ctx_sem_frontend()
     assert validar_plano(plano(com_frontend=False), c, plano_base(False)) == []

@@ -408,6 +408,11 @@ def _endpoint(texto: str) -> str:
     return f"{partes[0].upper()} {partes[1]}" if len(partes) == 2 else texto.strip()
 
 
+def _simples(nome: str) -> str:
+    """Nome da classe sem o pacote: br.com.x.UserService -> UserService."""
+    return nome.strip().rsplit(".", 1)[-1]
+
+
 def endpoints_da_arquitetura(a: ModuleArchitecture) -> Set[str]:
     return {f"{ep.method} {ep.path}" for ep in a.endpoints}
 
@@ -514,13 +519,15 @@ def validar_plano(
     if sem_controller:
         erros.append(f"Endpoints without a kind 'controller' file implementing them: "
                      f"{sem_controller}.")
-    exportados = {x for f in p.backend_files for x in f.exports}
-    for s in arq.public_services:
-        if s.interface not in exportados:
-            erros.append(f"Public service '{s.interface}' does not appear in the exports of "
+    # compara pelo nome da classe: a arquitetura pode declarar o nome qualificado
+    # (br.com...UserQueryService) e o plano exportar o simples, ou o contrário
+    exportados = {_simples(x) for f in p.backend_files for x in f.exports}
+    for interface in dict.fromkeys(s.interface for s in arq.public_services):
+        if _simples(interface) not in exportados:
+            erros.append(f"Public service '{interface}' does not appear in the exports of "
                          "any backend file.")
     for ev in arq.domain_events:
-        if ev.name not in exportados:
+        if _simples(ev.name) not in exportados:
             erros.append(f"Event '{ev.name}' does not appear in the exports of any "
                          "backend file.")
 
