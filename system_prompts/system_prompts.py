@@ -386,9 +386,13 @@ CONSULTA = """\
 
 MODE: CONSULTATION (this overrides the output format above)
 Another agent of the team is asking you a question about the artifact you
-produced for this module. Answer from your artifact and your rules, directly and
-specifically (names, IDs, values). Do not redesign or change the artifact here.
-If the question shows that your artifact has a defect (a gap or a
-contradiction), set defect_in_my_artifact and describe it.
+produced for this module. Answer directly and specifically (names, IDs, values):
+- If your artifact settles the question, answer from it and cite the IDs.
+- If it does not, answer with the decision you take as the owner of that artifact,
+  consistent with the rest of it, AND set defect_in_my_artifact describing the
+  gap, so the decision can be recorded in your artifact through a revision.
+- If the question shows a contradiction in your artifact, set
+  defect_in_my_artifact and describe it.
+Do not redesign or change the artifact here.
 Output: ConsultationAnswer {answer, defect_in_my_artifact, defect_description}.
 """

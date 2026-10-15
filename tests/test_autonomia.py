@@ -187,10 +187,13 @@ def test_tools_usam_a_sessao(tmp_path):
 def test_tools_por_papel(papel, esperado, monkeypatch):
     import importlib
     capturado = {}
-    monkeypatch.setattr(base, "_agente_cache",
-                        lambda regras, schema, ctx, tools: capturado.setdefault("t", tools))
+    def falso(regras, schema, ctx, tools, etapa=""):
+        capturado.update(t=tools, etapa=etapa)
+
+    monkeypatch.setattr(base, "_agente_cache", falso)
     importlib.import_module(f"agents.{papel}").get_agente(contexto())
     assert set(capturado["t"]) == esperado
+    assert capturado["etapa"] == papel  # a etapa chega ao prompt (dicas do TEAMWORK)
 
 
 def test_cria_os_agentes_reais_com_tools(monkeypatch):

@@ -257,3 +257,43 @@ def test_resumo_conta_mensagens(tmp_path):
     assert r["mensagens_entre_agentes"] == 2
     assert r["mensagens_por_tipo"] == {"blocker": 1, "resolution": 1}
     assert "Mensagens entre agentes: 2 (blocker: 1, resolution: 1)" in metricas.markdown(r)
+
+
+# --------------------------------------------------------- prompt TEAMWORK
+def _instrucoes(etapa):
+    return ferramentas.instrucoes(ferramentas.para(etapa, True), "X", 12, etapa)
+
+
+def test_teamwork_diz_quem_e_dono_de_que():
+    texto = _instrucoes("arquiteto_software")
+    assert "TEAMWORK" in texto
+    assert "clarifier (requirements and business rules, in the final specification)" in texto
+    assert "read-only tools (get_artifact, get_contracts) to" in texto  # sem as de conversa
+    assert "data_modeler (tables, columns" in texto
+    assert "planner (" not in texto  # o Arquiteto não fala com o Planejador
+    assert "up to 3 per run" in texto
+    assert "Do NOT ask about what is already explicit" in texto
+
+
+def test_teamwork_tem_dica_do_papel():
+    assert "report_blocker to the data_modeler" in _instrucoes("arquiteto_software")
+    assert "unique, optional" in _instrucoes("modelador_dados")
+    assert "screen behavior" in _instrucoes("implementador_frontend")
+
+
+def test_teamwork_dos_implementadores_nao_fala_em_bloqueio():
+    texto = _instrucoes("implementador_backend")
+    assert "TEAMWORK" in texto and "ask the clarifier" in texto
+    assert "report_blocker" not in texto  # eles só perguntam
+
+
+def test_sem_comunicacao_nao_ha_teamwork():
+    assert "TEAMWORK" not in ferramentas.instrucoes(
+        ferramentas.para("arquiteto_software", False), "X", 12, "arquiteto_software")
+    assert "TEAMWORK" not in _instrucoes("requisitos")  # o primeiro não tem com quem falar
+
+
+def test_modo_consulta_registra_decisao_nova_como_lacuna():
+    from system_prompts.system_prompts import CONSULTA
+    assert "decision you take as the owner" in CONSULTA
+    assert "set defect_in_my_artifact" in CONSULTA

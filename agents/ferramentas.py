@@ -28,7 +28,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, model_validator
 
 from ambiente import Leitura
-from config import COMUNICACAO, LIMITE_LEITURA
+from config import COMUNICACAO, LIMITE_LEITURA, MAX_CONSULTAS_AGENTE
 
 # nome em inglês (vocabulário dos agentes) -> chave do artefato no ambiente
 ARTEFATOS_EN = {
@@ -303,11 +303,20 @@ def _destino(recipient: str, permitidos: Tuple[str, ...]):
 @tool
 @_observado
 def ask_agent(recipient: str, question: str) -> str:
-    """Ask a question to the agent that produced an earlier artifact of THIS module
-    (e.g. ask the data_modeler why a column is nullable, or the clarifier what a
-    requirement means). The recipient answers from its own artifact and does not
-    change it. Ask before guessing an intent that the artifacts do not make clear.
-    The number of questions per run is limited."""
+    """Ask a question to the author of an earlier artifact of THIS module and get
+    the answer right away. Who owns what:
+      - requirements_analyst: the original analysis and the problems it found;
+      - clarifier: requirements and business rules (the final specification);
+      - data_modeler: tables, columns, constraints and relationships;
+      - software_architect: endpoints, public services, events and dependencies;
+      - planner: the file plan (which file does what and what it exports).
+    Ask instead of assuming whenever the artifacts do not state something
+    explicitly. Examples: "Can a deactivated customer still receive deliveries of
+    approved orders?", "Is sku unique per tenant or globally?", "Which status code
+    should a duplicate e-mail return?". Ask one precise question at a time and
+    include the IDs (FR, table, endpoint) it is about. The recipient answers from
+    its artifact and does not change it. The number of questions per run is
+    limited."""
     s = sessao_atual()
     c = s.canal if s else None
     if not c:
@@ -325,12 +334,15 @@ def ask_agent(recipient: str, question: str) -> str:
 @_observado
 def report_blocker(recipient: str, problem: str) -> str:
     """Report that an earlier artifact of THIS module has a defect that prevents you
-    from doing your job correctly and that you cannot work around within your own
-    rules (e.g. a table, column, requirement or endpoint you need is missing or
-    contradictory). Be specific: what is wrong and what you need. The recipient
-    will be asked to revise its artifact, and you will run again with the revised
-    version. Even after reporting, finish by submitting your best answer with the
-    current inputs."""
+    from doing your job correctly and that you must not work around within your own
+    rules. Examples: a column or table you need is missing from the closed data
+    model; two requirements contradict each other; an endpoint the screens need
+    does not exist in the architecture; an answer from ask_agent admitted a gap.
+    Not a blocker: a design you would have done differently, or a detail you can
+    decide within your own role. Be specific: what is wrong, where (IDs), and what
+    you need. The recipient will be asked to revise its artifact, and you will run
+    again with the revised version. Even after reporting, finish by submitting
+    your best answer with the current inputs."""
     s = sessao_atual()
     c = s.canal if s else None
     if not c:
@@ -401,29 +413,65 @@ class EntregaNoFimDoOrcamento(AgentMiddleware):
         return handler(request)
 
 
-def instrucoes(tools, nome_saida: str, limite: int) -> str:
-    """Parágrafo do system prompt sobre autonomia (anexado às regras do papel)."""
+_COMUNICACAO = {"ask_agent", "report_blocker"}
+
+DONOS = {
+    "requisitos": "the original analysis and its problems",
+    "esclarecedor": "requirements and business rules, in the final specification",
+    "modelador_dados": "tables, columns, constraints and relationships",
+    "arquiteto_software": "endpoints, public services, events and dependencies",
+    "planejador": "the file plan (which file does what and what it exports)",
+}
+
+# Dicas por papel: as dúvidas típicas de cada etapa e a quem levá-las.
+DICAS = {
+    "esclarecedor": (
+        "If resolving a problem depends on what the requirements_analyst meant or "
+        "found, ask it before deciding."),
+    "modelador_dados": (
+        "Typical questions for the clarifier: whether a value is unique, optional or "
+        "limited to a set of values; whether records are deleted, deactivated or kept "
+        "as history; which module owns data shared with others. If two requirements "
+        "you must model contradict each other, call report_blocker to the clarifier."),
+    "arquiteto_software": (
+        "The data model is closed: if an endpoint or rule needs data the model does "
+        "not have, call report_blocker to the data_modeler instead of working around "
+        "it. If the expected behavior of a requirement is unclear (who may do it, "
+        "what happens on conflict, which status code), ask the clarifier."),
+    "planejador": (
+        "If an endpoint, service or screen cannot be mapped to the data model, or a "
+        "screen needs data that no endpoint returns, call report_blocker to the "
+        "software_architect. If you are unsure where a responsibility belongs, ask "
+        "the software_architect."),
+    "implementador_backend": (
+        "Before inventing a business rule, validation, error, status transition or "
+        "parameter value that the specification and the plan do not state, ask the "
+        "clarifier (rules) or the software_architect (API behavior). If the plan and "
+        "the architecture disagree about a file, ask the planner."),
+    "implementador_frontend": (
+        "Before inventing screen behavior, a field validation or which role sees "
+        "which action, ask the clarifier (rules) or the software_architect (API "
+        "behavior). If the plan and the architecture disagree about a file, ask the "
+        "planner."),
+}
+
+
+def instrucoes(tools, nome_saida: str, limite: int, etapa: str = "") -> str:
+    """Blocos do system prompt sobre autonomia e trabalho em equipe (anexados às
+    regras do papel)."""
     partes = ["\nAUTONOMY (tools and submission):"]
     if tools:
         partes.append(
             "- You work inside a shared environment that holds what the other agents "
             "already produced and the project accepted. Use the read-only tools "
-            f"({', '.join(t.name for t in tools)}) to look up whatever you need that "
+            f"({', '.join(t.name for t in tools if t.name not in _COMUNICACAO)}) to "
+            "look up whatever you need that "
             "is not in the message. Do not guess names, signatures or files: read them.")
     nomes = {t.name for t in tools}
     if "read_files" in nomes or "get_signatures" in nomes:
         partes.append(
             "- Read files in batches: pass ALL the paths you need in ONE read_files "
             "(or get_signatures) call instead of one call per file.")
-    if "ask_agent" in nomes:
-        partes.append(
-            "- You are one agent of a team. If an earlier artifact of this module is "
-            "unclear, ask its author with ask_agent instead of guessing.")
-    if "report_blocker" in nomes:
-        partes.append(
-            "- If an earlier artifact has a defect you cannot work around (something "
-            "you need is missing or contradictory), call report_blocker with a precise "
-            "description, then still submit your best answer.")
     partes.append(
         f"- You have a budget of about {limite} steps; each tool call and each "
         "submission uses one. Read only what you need.")
@@ -431,4 +479,32 @@ def instrucoes(tools, nome_saida: str, limite: int) -> str:
         f"- You finish by calling the output tool {nome_saida} with your COMPLETE "
         "answer. It is validated automatically; if it is rejected you receive the "
         "list of problems: fix ALL of them and submit again.")
+    if "ask_agent" in nomes:
+        partes += _equipe(etapa, "report_blocker" in nomes)
     return "\n".join(partes) + "\n"
+
+
+def _equipe(etapa: str, pode_bloquear: bool) -> List[str]:
+    """Bloco TEAMWORK: com quem falar, quando perguntar e quando bloquear."""
+    autores = [f"{PAPEIS[e]} ({DONOS[e]})" for e in CONSULTA.get(etapa, ()) if e in DONOS]
+    partes = ["\nTEAMWORK (you are one agent of a team working on this module):"]
+    if autores:
+        partes.append("- The authors of the earlier artifacts are available: "
+                      + "; ".join(autores) + ".")
+    partes.append(
+        "- ASK with ask_agent whenever you would otherwise have to assume something "
+        "the artifacts do not state explicitly: the intent of a requirement, a "
+        "business rule, an allowed value, a state transition, who may perform an "
+        "action. A wrong assumption propagates to every later stage; a question costs "
+        f"one step (up to {MAX_CONSULTAS_AGENTE} per run).")
+    partes.append(
+        "- Do NOT ask about what is already explicit in the message or readable with "
+        "the tools.")
+    if pode_bloquear:
+        partes.append(
+            "- If two artifacts contradict each other, or something you need is missing, "
+            "do not silently work around it or invent it: call report_blocker to its "
+            "author, then still submit your best answer.")
+    if etapa in DICAS:
+        partes.append("- " + DICAS[etapa])
+    return partes

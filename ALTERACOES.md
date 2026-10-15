@@ -1,5 +1,6 @@
 # Alterações
 
+- [Rodada 11 — Prompts de trabalho em equipe (F3)](#rodada-11--prompts-de-trabalho-em-equipe-f3)
 - [Rodada 10 — Contratos enxutos (custo da autonomia)](#rodada-10--contratos-enxutos-custo-da-autonomia)
 - [Rodada 9 — F3: comunicação entre agentes](#rodada-9--f3-comunicação-entre-agentes)
 - [Rodada 8 — F2: autonomia dos agentes](#rodada-8--f2-autonomia-dos-agentes)
@@ -10,6 +11,48 @@
 - [Rodada 3 — Limites contra repetição sem fim e primeira execução real](#rodada-3--limites-contra-repetição-sem-fim-e-primeira-execução-real)
 - [Rodada 2 — Planejador e Implementadores (backend e frontend)](#rodada-2--planejador-e-implementadores-backend-e-frontend)
 - [Rodada 1 — Integração do Arquiteto-chefe e execução por projeto](#rodada-1--integração-do-arquiteto-chefe-e-execução-por-projeto)
+
+---
+
+## Rodada 11 — Prompts de trabalho em equipe (F3)
+
+Data: 15/10/2026.
+
+### Motivo
+Na implementação da F3 (Users, Catalog, Inventory), o Planejador e os
+Implementadores tinham `ask_agent` disponível e não o usaram nenhuma vez em 468
+ações. Na especificação, houve 2 perguntas em 8 módulos. A instrução era uma
+frase genérica ("se um artefato anterior não estiver claro, pergunte ao autor"),
+e o modelo raramente se considera em dúvida. A decisão foi focar na F3 e ajustar
+os prompts.
+
+### Mudanças
+- **Bloco TEAMWORK** no system prompt de quem tem `ask_agent`
+  (`ferramentas.instrucoes`, agora recebendo a etapa):
+  - quem são os autores disponíveis e de que cada um é dono;
+  - perguntar sempre que for preciso supor algo que os artefatos não dizem
+    (intenção de um requisito, regra de negócio, valor permitido, transição de
+    estado, quem pode fazer o quê);
+  - não perguntar o que já está explícito;
+  - bloquear em vez de contornar ou inventar, para quem pode bloquear.
+- **Dicas por papel** (`DICAS`), com as dúvidas típicas de cada etapa e a quem
+  levá-las. Exemplo: o Arquiteto não pode criar colunas no modelo, que está
+  fechado, então bloqueia o Modelador.
+- **Descrição das tools:** `ask_agent` diz de que cada autor é dono e traz
+  exemplos de perguntas. `report_blocker` diz o que é e o que não é um bloqueio.
+- **Modo consulta:** quando o artefato de quem responde não resolve a dúvida, ele
+  responde com a decisão que toma como dono e marca a lacuna
+  (`defect_in_my_artifact`). Quem perguntou pode então pedir a revisão, e a
+  decisão fica registrada no artefato, não só na conversa.
+- O bloco AUTONOMY deixou de listar `ask_agent` e `report_blocker` entre as tools
+  "só de leitura".
+
+As execuções anteriores da F3 (especificação e implementação) usaram os prompts
+antigos.
+
+### Verificação
+- 204 testes (5 novos em `tests/test_comunicacao.py`). O teste das tools por papel
+  também confere que a etapa chega ao prompt.
 
 ---
 

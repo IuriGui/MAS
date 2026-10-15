@@ -18,7 +18,7 @@ def _modelo():
 
 
 def criar_agente_estruturado(system_prompt: str, response_format, tools: Sequence = (),
-                             modelo=None, autonomia: bool = AUTONOMIA):
+                             modelo=None, autonomia: bool = AUTONOMIA, etapa: str = ""):
     """Agente que devolve um objeto Pydantic em `structured_response`.
 
     Com autonomia (F2): recebe as tools de leitura do ambiente, a submissão é
@@ -34,7 +34,7 @@ def criar_agente_estruturado(system_prompt: str, response_format, tools: Sequenc
         model=modelo,
         tools=list(tools),
         system_prompt=system_prompt + ferramentas.instrucoes(
-            tools, response_format.__name__, LIMITE_CHAMADAS_AGENTE),
+            tools, response_format.__name__, LIMITE_CHAMADAS_AGENTE, etapa),
         response_format=ToolStrategy(ferramentas.com_validacao(response_format),
                                      handle_errors=ferramentas.mensagem_reprovacao),
         middleware=[
@@ -50,17 +50,19 @@ def criar_agente_estruturado(system_prompt: str, response_format, tools: Sequenc
 
 
 @lru_cache(maxsize=16)
-def _agente_cache(regras: str, response_format, contexto_json: str, nomes_tools: tuple):
+def _agente_cache(regras: str, response_format, contexto_json: str, nomes_tools: tuple,
+                  etapa: str = ""):
     contexto = ProjectContext.model_validate_json(contexto_json)
     tools = [ferramentas.POR_NOME[n] for n in nomes_tools]
-    return criar_agente_estruturado(com_contexto(contexto, regras), response_format, tools)
+    return criar_agente_estruturado(com_contexto(contexto, regras), response_format, tools,
+                                    etapa=etapa)
 
 
 def criar_agente_de_modulo(regras: str, response_format, contexto: ProjectContext,
-                           tools: Sequence = ()):
+                           tools: Sequence = (), etapa: str = ""):
     """Agente de módulo: regras + PROJECT CONTEXT do projeto no system prompt.
 
     Reaproveita o agente enquanto o contexto for o mesmo.
     """
     return _agente_cache(regras, response_format, contexto.model_dump_json(),
-                         tuple(t.name for t in tools))  # tools não são hashable
+                         tuple(t.name for t in tools), etapa)  # tools não são hashable

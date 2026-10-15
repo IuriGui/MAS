@@ -6,4 +6,5 @@ from system_prompts.system_prompts import IMPLEMENTADOR_FRONTEND
 
 def get_agente(contexto: ProjectContext):
     return criar_agente_de_modulo(IMPLEMENTADOR_FRONTEND, GeneratedFiles, contexto,
-                                  ferramentas.para("implementador_frontend"))
+                                  ferramentas.para("implementador_frontend"),
+                                  etapa="implementador_frontend")
