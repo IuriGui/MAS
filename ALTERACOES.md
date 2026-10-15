@@ -58,8 +58,17 @@ segunda execução dela foi interrompida às 02:48, quando o WSL parou.
   último ponto, produziria `UserSummaryDto>`. Isso apagaria o `Optional` e levaria
   o agente a supor que o usuário sempre existe.
 
+### Implementar um subconjunto de módulos
+Com `--apenas` e etapas de implementação:
+- a base compartilhada passa a ser planejada só para os módulos escolhidos. Antes,
+  o roteador do frontend importava as rotas dos 8 módulos, mesmo dos que não
+  seriam gerados, e o frontend não compilaria;
+- o subconjunto precisa incluir as dependências de cada módulo escolhido, segundo
+  o `module_map` e as dependências declaradas na arquitetura. Se faltar alguma, o
+  programa para antes de chamar a API, por exemplo: "Sales usa Catalog, Users".
+
 ### Verificação
-- 181 testes. Os novos (`tests/test_contratos.py`) cobrem:
+- 184 testes (3 novos em `tests/test_projeto.py` para o subconjunto). Os novos (`tests/test_contratos.py`) cobrem:
   - genéricos simples e aninhados (`Optional`, `List`, `Map`, `Page`);
   - listas de parâmetros, vetores e curingas;
   - textos que não podem mudar (`e.g.`, `version 1.2`, tipos primitivos);

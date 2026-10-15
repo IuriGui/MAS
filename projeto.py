@@ -119,7 +119,9 @@ def processar_projeto(
     - `modulos_dir`: pasta com descrições detalhadas, uma por módulo, no arquivo
       <slug do nome>.md (ex.: users.md). Sem arquivo, usa a responsabilidade da
       seção MODULES (ou a do module_map, para módulos de plataforma).
-    - `apenas`: processa só estes módulos (os demais seguem como contexto).
+    - `apenas`: processa só estes módulos (os demais seguem como contexto). Com
+      implementação, o subconjunto precisa incluir os módulos de que ele depende,
+      e a base compartilhada é planejada só para ele.
     - `de`: retoma cada módulo a partir desta etapa (artefatos lidos do disco).
     - Uma falha num módulo não interrompe os seguintes; fica registrada.
     - `agente_chefe` / `fabrica_agentes` permitem injetar agentes falsos em testes.
@@ -152,13 +154,22 @@ def processar_projeto(
     # Arquiteturas de execuções anteriores (se houver) ajudam a base (ex.: login)
     arquiteturas = amb.arquiteturas()
     implementa = ETAPAS.index(ate) >= ETAPAS.index("planejador")
+    escolhidos = [n for n in contexto.build_order
+                  if not filtro or n.strip().lower() in filtro]
+    if implementa and filtro:
+        faltando = dependencias_faltando(contexto, escolhidos, arquiteturas)
+        if faltando:
+            raise PipelineError(
+                "Para implementar só " + ", ".join(escolhidos) + ", inclua também "
+                "os módulos de que eles dependem: " + "; ".join(
+                    f"{m} usa {', '.join(d)}" for m, d in faltando.items()))
     if implementa:
         agentes_base = fabrica_agentes(contexto) if fabrica_agentes else None
         if agentes_base is None:
             from pipeline import criar_agentes
             agentes_base = criar_agentes(contexto)
         plano_base = implementacao.garantir_base(
-            contexto, list(contexto.build_order), amb.base, codigo,
+            contexto, escolhidos, amb.base, codigo,
             agentes_base, lado_final(ate), max_tentativas,
             arquiteturas=arquiteturas or None, ambiente=amb)
 
@@ -201,6 +212,25 @@ def processar_projeto(
         "modulos": status,
     })
     return {"pasta": str(pasta), "contexto": contexto, "modulos": status}
+
+
+def dependencias_faltando(contexto: ProjectContext, escolhidos: List[str],
+                          arquiteturas: dict) -> dict:
+    """{módulo escolhido: dependências fora do conjunto}, pelo module_map e pelas
+    dependências que a arquitetura de cada módulo declara."""
+    nomes = {n.strip().lower() for n in escolhidos}
+    mapa = {m.name.strip().lower(): m for m in contexto.module_map}
+    arqs = {n.strip().lower(): a for n, a in arquiteturas.items()}
+    faltando = {}
+    for nome in escolhidos:
+        chave = nome.strip().lower()
+        deps = set(mapa[chave].depends_on) if chave in mapa else set()
+        if chave in arqs:
+            deps |= {d.module for d in arqs[chave].module_dependencies}
+        fora = sorted(d for d in deps if d.strip().lower() not in nomes)
+        if fora:
+            faltando[nome] = fora
+    return faltando
 
 
 def _descricao_modulo(nome, modulos_dir, declarados, entradas) -> str:

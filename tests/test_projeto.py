@@ -169,3 +169,32 @@ def test_processar_projeto_apenas(tmp_path):
                             fabrica_agentes=lambda c: agentes(),
                             saida_dir=str(tmp_path))
     assert list(res["modulos"]) == ["Catalog"]
+
+
+def test_apenas_com_implementacao_exige_as_dependencias(tmp_path):
+    with pytest.raises(PipelineError, match="Sales usa Catalog, Users"):
+        processar_projeto("Loja", SISTEMA, contexto=contexto(), apenas=["Sales"],
+                          fabrica_agentes=lambda c: agentes(), saida_dir=str(tmp_path))
+    assert not (tmp_path / "loja" / "base").exists()  # parou antes de gastar API
+
+
+def test_apenas_so_na_especificacao_nao_exige_dependencias(tmp_path):
+    res = processar_projeto("Loja", SISTEMA, contexto=contexto(), apenas=["Sales"],
+                            ate="arquiteto_software",
+                            fabrica_agentes=lambda c: agentes(), saida_dir=str(tmp_path))
+    assert res["modulos"]["Sales"]["status"] == "ok"
+
+
+def test_base_so_com_os_modulos_escolhidos(tmp_path):
+    usados = []
+
+    def fabrica(ctx):
+        usados.append(agentes())
+        return usados[-1]
+
+    res = processar_projeto("Loja", SISTEMA, contexto=contexto(), apenas=["users", "Catalog"],
+                            fabrica_agentes=fabrica, saida_dir=str(tmp_path))
+    assert list(res["modulos"]) == ["Users", "Catalog"]
+    msg_base = next(c for c in usados[0]["planejador"].chamadas if "MODE: BASE PLAN" in c)
+    assert "MODULES: Users, Catalog\n" in msg_base
+    assert "src/modules/sales/routes" not in msg_base  # o roteador não importa Sales
