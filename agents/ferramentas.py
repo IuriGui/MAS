@@ -22,6 +22,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Callable, Iterator, List, Optional, Tuple
 
+from langchain.agents.middleware import AgentMiddleware
+from langchain_core.messages import SystemMessage
 from langchain_core.tools import tool
 from pydantic import BaseModel, model_validator
 
@@ -363,6 +365,37 @@ def para(etapa: str, comunicacao: bool = COMUNICACAO) -> tuple:
     if comunicacao and BLOQUEIO.get(etapa):
         tools += (report_blocker,)
     return tools
+
+
+# ------------------------------------------------------------- orçamento
+AVISO_ORCAMENTO = (
+    "\n\nBUDGET EXHAUSTED: you cannot read anything else. Submit your COMPLETE "
+    "answer NOW with the output tool {saida}, using what you already have.")
+
+
+class EntregaNoFimDoOrcamento(AgentMiddleware):
+    """Nas últimas `reserva` chamadas do orçamento, o agente só pode submeter.
+
+    Sem isso, um agente pode gastar o orçamento inteiro lendo o ambiente e nunca
+    entregar (aconteceu no Implementador frontend da base). Aqui, as tools de
+    leitura e comunicação saem da chamada e o system prompt avisa; como o
+    ToolStrategy obriga a chamar alguma tool, só sobra a de saída. A reserva de 2
+    deixa uma chance de corrigir uma submissão reprovada.
+    """
+
+    def __init__(self, limite: int, nome_saida: str, reserva: int = 2):
+        super().__init__()
+        self.limite, self.nome_saida, self.reserva = limite, nome_saida, reserva
+
+    def wrap_model_call(self, request, handler):
+        feitas = sum(1 for m in request.messages if getattr(m, "type", "") == "ai")
+        if feitas >= self.limite - self.reserva:
+            texto = request.system_message.content if request.system_message else ""
+            request = request.override(
+                tools=[],
+                system_message=SystemMessage(
+                    content=texto + AVISO_ORCAMENTO.format(saida=self.nome_saida)))
+        return handler(request)
 
 
 def instrucoes(tools, nome_saida: str, limite: int) -> str:

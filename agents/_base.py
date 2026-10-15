@@ -37,8 +37,11 @@ def criar_agente_estruturado(system_prompt: str, response_format, tools: Sequenc
             tools, response_format.__name__, LIMITE_CHAMADAS_AGENTE),
         response_format=ToolStrategy(ferramentas.com_validacao(response_format),
                                      handle_errors=ferramentas.mensagem_reprovacao),
-        middleware=[ModelCallLimitMiddleware(run_limit=LIMITE_CHAMADAS_AGENTE,
-                                             exit_behavior="end")],
+        middleware=[
+            ferramentas.EntregaNoFimDoOrcamento(LIMITE_CHAMADAS_AGENTE,
+                                                response_format.__name__),
+            ModelCallLimitMiddleware(run_limit=LIMITE_CHAMADAS_AGENTE, exit_behavior="end"),
+        ],
     )
     # Passos do grafo por invocação: quem limita é o orçamento de chamadas ao
     # modelo (middleware acima); este teto só protege contra um laço do grafo.

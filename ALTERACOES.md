@@ -67,8 +67,22 @@ Com `--apenas` e etapas de implementação:
   o `module_map` e as dependências declaradas na arquitetura. Se faltar alguma, o
   programa para antes de chamar a API, por exemplo: "Sales usa Catalog, Users".
 
+### Entrega obrigatória no fim do orçamento
+Na implementação da F3 (Users, Catalog, Inventory), o 4º lote do frontend da base
+(roteador e App, que dependem de quase tudo) falhou duas vezes. O agente gastou as
+12 chamadas do orçamento lendo arquivos (11 leituras por tentativa) e nunca
+submeteu. Na segunda tentativa, releu os mesmos arquivos do zero.
+
+Agora o middleware `EntregaNoFimDoOrcamento` age nas 2 últimas chamadas do
+orçamento: tira as tools de leitura e comunicação e avisa no system prompt
+("BUDGET EXHAUSTED: submit now"). Como o `ToolStrategy` obriga a chamar alguma
+tool, só resta submeter. A segunda chamada da reserva serve para corrigir uma
+submissão reprovada.
+
 ### Verificação
-- 184 testes (3 novos em `tests/test_projeto.py` para o subconjunto). Os novos (`tests/test_contratos.py`) cobrem:
+- 186 testes: 3 novos em `tests/test_projeto.py` para o subconjunto, e 2 em
+  `tests/test_autonomia.py`. Um deles usa um agente que só quer ler e passa a
+  entregar na reserva; o outro reprova uma submissão na reserva e a corrige. Os novos (`tests/test_contratos.py`) cobrem:
   - genéricos simples e aninhados (`Optional`, `List`, `Map`, `Page`);
   - listas de parâmetros, vetores e curingas;
   - textos que não podem mudar (`e.g.`, `version 1.2`, tipos primitivos);

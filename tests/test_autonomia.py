@@ -228,3 +228,62 @@ def test_acessos_dos_agentes_ficam_registrados(tmp_path, capsys):
     assert acessos[2]["resultado"] == "approved"
     saida = capsys.readouterr().out
     assert "· requisitos → get_artifact(module='Catalog', artifact='architecture')" in saida
+
+
+class ModeloLeitor(BaseChatModel):
+    """Quer ler o ambiente para sempre: chama get_contracts enquanto a tool existir;
+    quando só a de saída estiver disponível, submete. Guarda as tools de cada chamada."""
+    tools_por_chamada: list = []
+    sistemas: list = []
+
+    @property
+    def _llm_type(self):
+        return "leitor"
+
+    def bind_tools(self, tools, **kw):
+        self.tools_por_chamada.append([getattr(t, "name", None) or t["function"]["name"]
+                                       for t in tools])
+        return self
+
+    def _generate(self, messages, stop=None, run_manager=None, **kw):
+        self.sistemas.append(messages[0].content)
+        n = len(self.sistemas)
+        if "get_contracts" in self.tools_por_chamada[-1]:
+            chamada = {"name": "get_contracts", "args": {}, "id": f"c{n}"}
+        else:
+            chamada = {"name": "ModuleAnalysis", "args": VALIDA, "id": f"c{n}"}
+        return ChatResult(generations=[ChatGeneration(
+            message=AIMessage(content="", tool_calls=[chamada]))])
+
+
+def test_fim_do_orcamento_obriga_a_submeter(tmp_path, monkeypatch):
+    """O agente que só lê é obrigado a entregar nas 2 últimas chamadas."""
+    monkeypatch.setattr(base, "LIMITE_CHAMADAS_AGENTE", 5)
+    modelo = ModeloLeitor()
+    m = {}
+    obj, erros = executar_agente("t", _agente(modelo), "x", lambda o: [], m, 1,
+                                 modulo="Users", leitura=_ambiente(tmp_path).leitura())
+    assert erros == [] and obj.scope_summary == "ok"
+    assert len(modelo.sistemas) == 4  # 3 leituras + a submissão obrigatória
+    assert "get_contracts" in modelo.tools_por_chamada[2]
+    assert modelo.tools_por_chamada[3] == ["ModuleAnalysis"]  # só a tool de saída
+    assert "BUDGET EXHAUSTED" in modelo.sistemas[3]
+    assert "BUDGET EXHAUSTED" not in modelo.sistemas[2]
+    assert m["t"]["chamadas_tool"] == 3 and m["t"]["sem_saida"] == 0
+
+
+def test_submissao_reprovada_no_fim_do_orcamento_ainda_pode_ser_corrigida(tmp_path, monkeypatch):
+    monkeypatch.setattr(base, "LIMITE_CHAMADAS_AGENTE", 4)
+    modelo = ModeloRoteiro(roteiro=[
+        ("get_contracts", {}),
+        ("get_contracts", {}),
+        ("ModuleAnalysis", RUIM),    # 1ª chamada da reserva: reprovada
+        ("ModuleAnalysis", VALIDA),  # 2ª chamada da reserva: corrigida
+    ])
+    m = {}
+    obj, erros = executar_agente("t", _agente(modelo), "x", valida_escopo, m, 1,
+                                 modulo="Users", leitura=_ambiente(tmp_path).leitura())
+    assert erros == [] and obj.scope_summary == "ok"
+    assert len(modelo.recebidas) == 4 and m["t"]["reprovadas"] == 1
+    assert modelo.ferramentas_vistas == ["ModuleAnalysis"]  # na reserva, só a de saída
+    assert "REJECTED" in _tool_msgs(modelo.recebidas[3])[-1].content
