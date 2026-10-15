@@ -79,8 +79,26 @@ orçamento: tira as tools de leitura e comunicação e avisa no system prompt
 tool, só resta submeter. A segunda chamada da reserva serve para corrigir uma
 submissão reprovada.
 
+### Leitura em lote (`read_files`)
+No último lote da base, o Implementador fez 11 chamadas ao modelo para 10 tools,
+uma leitura por chamada. Cada chamada reenvia o histórico inteiro, e o lote
+consumiu 336 mil tokens de entrada. Por isso:
+- `read_file(path)` foi trocada por `read_files(paths)`, e `get_signatures` passou
+  a receber uma lista. Não existe mais a versão de um arquivo, para o modelo não
+  continuar lendo de um em um.
+- A descrição das tools e as instruções pedem todos os caminhos numa chamada só.
+- Há um teto de `LIMITE_LEITURA` caracteres (padrão 120 mil) de conteúdo integral
+  por chamada. Acima dele, os arquivos seguintes vêm só com as assinaturas, com
+  aviso no cabeçalho.
+- Também removem caminhos repetidos, listam os inexistentes e recusam caminhos
+  fora da raiz.
+
+A implementação da F3 em andamento (Users, Catalog, Inventory) usa a versão
+anterior (`2d64cdc`), para os três módulos saírem da mesma versão. A
+`read_files` vale a partir das próximas execuções.
+
 ### Verificação
-- 186 testes: 3 novos em `tests/test_projeto.py` para o subconjunto, e 2 em
+- 193 testes (7 novos em `tests/test_leitura.py`). Antes, 186: 3 novos em `tests/test_projeto.py` para o subconjunto, e 2 em
   `tests/test_autonomia.py`. Um deles usa um agente que só quer ler e passa a
   entregar na reserva; o outro reprova uma submissão na reserva e a corrige. Os novos (`tests/test_contratos.py`) cobrem:
   - genéricos simples e aninhados (`Optional`, `List`, `Map`, `Page`);

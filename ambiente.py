@@ -285,6 +285,40 @@ class Leitura:
         texto = self._amb.ler(lado, caminho)
         return texto if texto is not None else f"File '{caminho}' does not exist ({lado})."
 
+    def ler_arquivos(self, lado: str, caminhos: List[str], limite: int) -> str:
+        """Vários arquivos numa resposta. Até `limite` caracteres vão inteiros; os
+        seguintes, só com as assinaturas públicas (avisado no cabeçalho)."""
+        if lado not in LADOS:
+            return f"Unknown side '{lado}'. Use one of: {list(LADOS)}."
+        caminhos = list(dict.fromkeys(c.strip() for c in caminhos if c.strip()))
+        if not caminhos:
+            return "Pass at least one file path."
+        partes, faltando, total = [], [], 0
+        for c in caminhos:
+            texto = self._amb.ler(lado, c)
+            if texto is None:
+                faltando.append(c)
+                continue
+            bloco = f"=== {c} ===\n{texto}"
+            if total + len(bloco) > limite:
+                bloco = (f"=== {c} === (public signatures only: size limit of this call; "
+                         f"read it alone if you need the full content)\n"
+                         f"{assinaturas(c, texto) or '(no public signatures found)'}")
+            partes.append(bloco)
+            total += len(bloco)
+        if faltando:
+            partes.append(f"Files that do not exist ({lado}): {faltando}")
+        return "\n\n".join(partes)
+
+    def assinaturas_de(self, lado: str, caminhos: List[str]) -> str:
+        """Assinaturas públicas de vários arquivos numa resposta."""
+        if lado not in LADOS:
+            return f"Unknown side '{lado}'. Use one of: {list(LADOS)}."
+        caminhos = list(dict.fromkeys(c.strip() for c in caminhos if c.strip()))
+        if not caminhos:
+            return "Pass at least one file path."
+        return "\n\n".join(f"=== {c} ===\n{self.assinaturas(lado, c)}" for c in caminhos)
+
     def assinaturas(self, lado: str, caminho: str) -> str:
         if lado not in LADOS:
             return f"Unknown side '{lado}'. Use one of: {list(LADOS)}."

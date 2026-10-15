@@ -28,7 +28,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, model_validator
 
 from ambiente import Leitura
-from config import COMUNICACAO
+from config import COMUNICACAO, LIMITE_LEITURA
 
 # nome em inglês (vocabulário dos agentes) -> chave do artefato no ambiente
 ARTEFATOS_EN = {
@@ -268,21 +268,24 @@ def list_files(prefix: str = "", side: str = "") -> str:
 
 @tool
 @_observado
-def read_file(path: str, side: str = "") -> str:
-    """Read the full content of an existing code file. `side` is backend or
-    frontend (default: the side you are working on)."""
+def read_files(paths: List[str], side: str = "") -> str:
+    """Read the full content of SEVERAL existing code files in one call. Pass every
+    file you need at once: each call costs a step of your budget and makes the
+    conversation longer. `side` is backend or frontend (default: the side you are
+    working on). Above a size limit, the remaining files come with their public
+    signatures only."""
     ler = _leitura()
-    return ler.ler_arquivo(_lado(side), path) if ler else _SEM_AMBIENTE
+    return ler.ler_arquivos(_lado(side), paths, LIMITE_LEITURA) if ler else _SEM_AMBIENTE
 
 
 @tool
 @_observado
-def get_signatures(path: str, side: str = "") -> str:
+def get_signatures(paths: List[str], side: str = "") -> str:
     """Read only the public signatures (types, constructors, methods, fields,
-    exports) of an existing code file. Cheaper than read_file when you only need
-    to know how to call it."""
+    exports) of SEVERAL existing code files in one call. Cheaper than read_files
+    when you only need to know how to call them. Pass every file at once."""
     ler = _leitura()
-    return ler.assinaturas(_lado(side), path) if ler else _SEM_AMBIENTE
+    return ler.assinaturas_de(_lado(side), paths) if ler else _SEM_AMBIENTE
 
 
 _SEM_CANAL = "Communication with other agents is not available in this run."
@@ -346,7 +349,7 @@ def report_blocker(recipient: str, problem: str) -> str:
 # tools por papel
 ESPECIFICACAO = (get_artifact, get_contracts)
 PLANEJAMENTO = (get_artifact, get_contracts, list_files, get_signatures)
-IMPLEMENTACAO = (get_artifact, get_contracts, list_files, read_file, get_signatures)
+IMPLEMENTACAO = (get_artifact, get_contracts, list_files, read_files, get_signatures)
 POR_NOME = {t.name: t for t in IMPLEMENTACAO + (ask_agent, report_blocker)}
 _LEITURA_POR_PAPEL = {
     "requisitos": ESPECIFICACAO, "esclarecedor": ESPECIFICACAO,
@@ -408,6 +411,10 @@ def instrucoes(tools, nome_saida: str, limite: int) -> str:
             f"({', '.join(t.name for t in tools)}) to look up whatever you need that "
             "is not in the message. Do not guess names, signatures or files: read them.")
     nomes = {t.name for t in tools}
+    if "read_files" in nomes or "get_signatures" in nomes:
+        partes.append(
+            "- Read files in batches: pass ALL the paths you need in ONE read_files "
+            "(or get_signatures) call instead of one call per file.")
     if "ask_agent" in nomes:
         partes.append(
             "- You are one agent of a team. If an earlier artifact of this module is "

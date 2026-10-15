@@ -160,7 +160,7 @@ def conteudo_dependencias(raiz: Path, lote: List[PlannedFile],
     Até `limite` caracteres vão inteiros; os seguintes vão só com as
     assinaturas públicas (nunca omitidos: sem eles o modelo inventa APIs).
     `sob_demanda` (agente autônomo): todos vão só com as assinaturas, e o agente
-    lê o conteúdo inteiro com a tool read_file quando precisar.
+    lê o conteúdo inteiro com a tool read_files quando precisar.
     """
     if sob_demanda:
         limite = 0
@@ -175,7 +175,7 @@ def conteudo_dependencias(raiz: Path, lote: List[PlannedFile],
             texto = (raiz / d).read_text(encoding="utf-8")
             bloco = f"=== {d} ===\n{texto}"
             if sob_demanda:
-                bloco = (f"=== {d} === (public signatures only; call read_file for "
+                bloco = (f"=== {d} === (public signatures only; call read_files for "
                          f"the full content)\n{assinaturas(d, texto)}")
             elif total + len(bloco) > limite:
                 bloco = (f"=== {d} === (só assinaturas públicas: limite de contexto)\n"

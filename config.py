@@ -70,3 +70,7 @@ MAX_REVISOES_MODULO = max(0, int(os.environ.get("MAX_REVISOES_MODULO", "2")))
 # Picos de demanda duram minutos; sem isso, um 503 derruba o lote inteiro.
 ESPERAS_API = tuple(int(x) for x in
                     os.environ.get("ESPERAS_API", "30,60,120,240,480").split(",") if x.strip())
+
+# Teto (caracteres) do conteúdo integral numa chamada de read_files. Acima dele,
+# os arquivos seguintes vêm só com as assinaturas públicas.
+LIMITE_LEITURA = int(os.environ.get("LIMITE_LEITURA", "120000"))

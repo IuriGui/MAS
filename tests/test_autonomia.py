@@ -168,9 +168,9 @@ def test_tools_usam_a_sessao(tmp_path):
         assert "endpoints: GET /api/v1/products" in contratos
         assert ferramentas.list_files.invoke({}) == "src/api/http.ts"  # lado da sessão
         assert "No backend files" in ferramentas.list_files.invoke({"side": "backend"})
-        assert "export function http" in ferramentas.read_file.invoke(
-            {"path": "src/api/http.ts"})
-        assert "http" in ferramentas.get_signatures.invoke({"path": "src/api/http.ts"})
+        assert "export function http" in ferramentas.read_files.invoke(
+            {"paths": ["src/api/http.ts"]})
+        assert "http" in ferramentas.get_signatures.invoke({"paths": ["src/api/http.ts"]})
         assert "Unknown artifact" in ferramentas.get_artifact.invoke(
             {"module": "Users", "artifact": "code"})
     assert ferramentas.sessao_atual() is None
@@ -181,7 +181,7 @@ def test_tools_usam_a_sessao(tmp_path):
     ("planejador", {"get_artifact", "get_contracts", "list_files", "get_signatures",
                     "ask_agent", "report_blocker"}),
     ("implementador_backend",
-     {"get_artifact", "get_contracts", "list_files", "read_file", "get_signatures",
+     {"get_artifact", "get_contracts", "list_files", "read_files", "get_signatures",
       "ask_agent"}),
 ])
 def test_tools_por_papel(papel, esperado, monkeypatch):
