@@ -173,7 +173,8 @@ def processar_modulo(
     def etapa_estruturada(etapa, mensagem, validar):
         print(f"[{ETAPAS.index(etapa) + 1}/{ETAPAS.index(ate) + 1}] {etapa} — {nome}")
         obj, erros = executar_agente(etapa, agentes[etapa], mensagem, validar,
-                                     metricas, max_tentativas, modulo=nome)
+                                     metricas, max_tentativas, modulo=nome,
+                                     leitura=amb.leitura())
         if erros:
             falhar(etapa, erros, obj)
         amb.publicar(nome, etapa, obj)
@@ -237,7 +238,7 @@ def _etapas_de_implementacao(nome, contexto, artefatos, agentes, amb, pasta, cod
         plano, erros = implementacao.planejar_modulo(
             nome, contexto, artefatos["especificacao"], artefatos["modelo_dados"],
             artefatos["arquitetura"], plano_base, numero_migracao, outros_modulos,
-            agentes["planejador"], metricas, max_tentativas)
+            agentes["planejador"], metricas, max_tentativas, leitura=amb.leitura())
         if erros:
             falhar("planejador", erros, plano)
         amb.publicar(nome, "planejador", plano)
@@ -249,7 +250,8 @@ def _etapas_de_implementacao(nome, contexto, artefatos, agentes, amb, pasta, cod
         manifesto = implementacao.implementar_backend(
             nome, contexto, artefatos["especificacao"], artefatos["modelo_dados"],
             artefatos["arquitetura"], artefatos["plano"], plano_base, numero_migracao,
-            codigo, pasta, agentes["implementador_backend"], metricas, max_tentativas)
+            codigo, pasta, agentes["implementador_backend"], metricas, max_tentativas,
+            leitura=amb.leitura())
         (pasta / "6_backend.json").write_text(json.dumps(manifesto, indent=2))
         amb.registrar("implementador_backend", "codigo", nome, _caminhos(manifesto))
         artefatos["arquivos_backend"] = manifesto
@@ -262,7 +264,8 @@ def _etapas_de_implementacao(nome, contexto, artefatos, agentes, amb, pasta, cod
             manifesto = implementacao.implementar_frontend(
                 nome, contexto, artefatos["especificacao"], artefatos["arquitetura"],
                 plano, plano_base, endpoints_externos or set(), codigo, pasta,
-                agentes["implementador_frontend"], metricas, max_tentativas)
+                agentes["implementador_frontend"], metricas, max_tentativas,
+                leitura=amb.leitura())
             (pasta / "7_frontend.json").write_text(json.dumps(manifesto, indent=2))
             amb.registrar("implementador_frontend", "codigo", nome, _caminhos(manifesto))
             artefatos["arquivos_frontend"] = manifesto

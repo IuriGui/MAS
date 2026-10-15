@@ -18,7 +18,7 @@ import layout
 import validation
 from ambiente import LADOS, caminhos_em_disco
 from assinaturas import assinaturas
-from config import IMPL_LIMITE_CONTEXTO, IMPL_LOTE, MAX_TENTATIVAS
+from config import AUTONOMIA, IMPL_LIMITE_CONTEXTO, IMPL_LOTE, MAX_TENTATIVAS
 from ddl import gerar_ddl, usa_sql
 from execucao import PipelineError, executar_agente
 from schemas import (FinalSpecification, GeneratedFiles, ImplementationPlan,
@@ -153,12 +153,17 @@ def montar_lotes(arquivos: List[PlannedFile], tamanho: int = IMPL_LOTE) -> List[
 
 
 def conteudo_dependencias(raiz: Path, lote: List[PlannedFile],
-                          limite: int = IMPL_LIMITE_CONTEXTO) -> str:
+                          limite: int = IMPL_LIMITE_CONTEXTO,
+                          sob_demanda: bool = False) -> str:
     """Conteúdo dos arquivos (já gravados) de que o lote depende.
 
     Até `limite` caracteres vão inteiros; os seguintes vão só com as
     assinaturas públicas (nunca omitidos: sem eles o modelo inventa APIs).
+    `sob_demanda` (agente autônomo): todos vão só com as assinaturas, e o agente
+    lê o conteúdo inteiro com a tool read_file quando precisar.
     """
+    if sob_demanda:
+        limite = 0
     no_lote = {f.path for f in lote}
     partes, total = [], 0
     vistos: Set[str] = set()
@@ -169,7 +174,10 @@ def conteudo_dependencias(raiz: Path, lote: List[PlannedFile],
             vistos.add(d)
             texto = (raiz / d).read_text(encoding="utf-8")
             bloco = f"=== {d} ===\n{texto}"
-            if total + len(bloco) > limite:
+            if sob_demanda:
+                bloco = (f"=== {d} === (public signatures only; call read_file for "
+                         f"the full content)\n{assinaturas(d, texto)}")
+            elif total + len(bloco) > limite:
                 bloco = (f"=== {d} === (só assinaturas públicas: limite de contexto)\n"
                          f"{assinaturas(d, texto)}")
             partes.append(bloco)
@@ -229,8 +237,11 @@ def executar_lotes(
     metricas: dict,
     max_tentativas: int,
     modulo: str,
+    leitura=None,
 ) -> List[dict]:
     """Gera os arquivos lote a lote, validando e gravando cada lote.
+
+    `leitura`: visão do ambiente para as tools do agente autônomo (F2).
 
     Retomada: cada lote aprovado é registrado em <etapa>.progresso.json. Numa
     nova execução, arquivos já registrados (e ainda presentes em disco) não são
@@ -249,12 +260,15 @@ def executar_lotes(
     lotes = montar_lotes(pendentes)
     for i, lote in enumerate(lotes, 1):
         print(f"  [{etapa}] lote {i}/{len(lotes)}: {len(lote)} arquivo(s)")
-        msg = montar_mensagem(lote, conteudo_dependencias(raiz, lote), i, len(lotes))
+        deps = conteudo_dependencias(raiz, lote,
+                                     sob_demanda=AUTONOMIA and leitura is not None)
+        msg = montar_mensagem(lote, deps, i, len(lotes))
         k = conhecidos()
         gerados, erros = executar_agente(
             etapa, agente, msg, lambda g: validation.validar_arquivos(g, lote, k),
             metricas, max_tentativas, modulo=modulo,
-            normalizar=lambda g: reparar_caminhos(g, lote))
+            normalizar=lambda g: reparar_caminhos(g, lote),
+            leitura=leitura, lado=raiz.name)
         if erros:
             invalido = pasta / f"{etapa}.lote{i}.invalido.json"
             invalido.write_text(gerados.model_dump_json(indent=2), encoding="utf-8")
@@ -325,7 +339,8 @@ def garantir_base(
             "planejador_base", agentes["planejador"],
             templates.msg_planejador_base(modulos, rotas, proibidos, front),
             lambda p: validation.validar_plano_base(p, contexto, modulos),
-            metricas, max_tentativas, modulo="base")
+            metricas, max_tentativas, modulo="base",
+            leitura=ambiente.leitura() if ambiente else None)
         if erros:
             (pasta / "planejador_base.invalido.json").write_text(
                 plano.model_dump_json(indent=2), encoding="utf-8")
@@ -370,7 +385,8 @@ def _implementar_base(contexto, modulos, pasta, codigo_dir, agentes, ate_lado,
             lambda raiz=raiz, lado=lado: _conhecidos(
                 raiz, [plano], lado, contexto, rotas_modulos=set(rotas),
                 endpoints=conhecidos_api),
-            pasta, metricas, max_tentativas, "base")
+            pasta, metricas, max_tentativas, "base",
+            leitura=ambiente.leitura() if ambiente else None)
         _salvar_json(manifesto_arq, manifesto)
         if ambiente:
             ambiente.registrar(f"implementador_{lado}", "codigo", "base",
@@ -383,6 +399,7 @@ def planejar_modulo(
     modelo: ModuleDataModel, arq: ModuleArchitecture,
     plano_base: Optional[ImplementationPlan], numero_migracao: int,
     outros_modulos: str, agente, metricas: dict, max_tentativas: int,
+    leitura=None,
 ):
     lay = layout.layout_modulo(contexto, nome, arq.java_package)
     ddl = gerar_ddl(modelo) if usa_sql(contexto) else ""
@@ -392,7 +409,7 @@ def planejar_modulo(
     return executar_agente(
         "planejador", agente, msg,
         lambda p: validation.validar_plano(p, nome, spec, modelo, arq, contexto, plano_base),
-        metricas, max_tentativas, modulo=nome)
+        metricas, max_tentativas, modulo=nome, leitura=leitura, lado="backend")
 
 
 def implementar_backend(
@@ -400,6 +417,7 @@ def implementar_backend(
     modelo: ModuleDataModel, arq: ModuleArchitecture, plano: ImplementationPlan,
     plano_base: Optional[ImplementationPlan], numero_migracao: int,
     codigo_dir: Path, pasta: Path, agente, metricas: dict, max_tentativas: int,
+    leitura=None,
 ) -> List[dict]:
     raiz = codigo_dir / "backend"
     lay = layout.layout_modulo(contexto, nome, arq.java_package)
@@ -422,7 +440,7 @@ def implementar_backend(
             api_base),
         lambda: _conhecidos(raiz, [plano, plano_base], "backend", contexto,
                             tabelas=tabelas),
-        pasta, metricas, max_tentativas, nome)
+        pasta, metricas, max_tentativas, nome, leitura=leitura)
     return manifesto
 
 
@@ -431,6 +449,7 @@ def implementar_frontend(
     arq: ModuleArchitecture, plano: ImplementationPlan,
     plano_base: Optional[ImplementationPlan], endpoints_externos: Set[str],
     codigo_dir: Path, pasta: Path, agente, metricas: dict, max_tentativas: int,
+    leitura=None,
 ) -> List[dict]:
     raiz = codigo_dir / "frontend"
     endpoints = {validation.normalizar_rota(e.path) for e in arq.endpoints}
@@ -442,4 +461,4 @@ def implementar_frontend(
             nome, spec, arq, plano, plano_base, deps, lote, i, n, api_base),
         lambda: _conhecidos(raiz, [plano, plano_base], "frontend", contexto,
                             endpoints=endpoints),
-        pasta, metricas, max_tentativas, nome)
+        pasta, metricas, max_tentativas, nome, leitura=leitura)

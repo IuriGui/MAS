@@ -108,3 +108,32 @@ serve de referência para comparar o que muda.
 
 As métricas desta linha de base são geradas por `scripts/linha_de_base.py`
 (ver README).
+
+## Depois da F2 (autonomia)
+
+O que mudou nos elementos de cada agente com `AUTONOMIA=1`:
+
+- **e (ambiente):** além do prompt, o agente percebe o ambiente compartilhado pelas
+  tools de leitura (`agents/ferramentas.py`). O conjunto de tools depende do papel:
+
+  | Agente | Tools |
+  |---|---|
+  | Arquiteto-chefe | nenhuma (roda antes de existir ambiente) |
+  | Requisitos, Esclarecedor, Modelador, Arquiteto de software | `get_artifact`, `get_contracts` |
+  | Planejador | `get_artifact`, `get_contracts`, `list_files`, `get_signatures` |
+  | Implementadores | as cinco, incluindo `read_file` |
+
+- **x (percepção):** a mensagem continua trazendo os dados principais da etapa. O
+  resto o agente busca quando precisa. Nos Implementadores, as dependências do
+  lote vêm só como assinaturas, e o conteúdo inteiro é lido sob demanda.
+- **y (ação):** o agente decide quando submeter. A submissão é validada no ato e,
+  se reprovada, volta para o agente com os erros. Ele corrige dentro do próprio
+  loop, com um orçamento de `LIMITE_CHAMADAS_AGENTE` chamadas.
+
+| Critério | Linha de base | Depois da F2 |
+|---|---|---|
+| Autonomia na **chamada de ferramentas** | Não | Sim: o agente escolhe o que ler no ambiente |
+| Decidir quando terminou | Não | Em parte: o agente submete quando quer, e o ambiente aceita ou reprova |
+| Comunicação **indireta** (ambiente compartilhado) | Não | Sim: os agentes leem o que os outros publicaram |
+| Autonomia no **planejamento** | Não | Não: a ordem das etapas segue fixa (F3) |
+| Comunicação **direta** (mensagens) | Não | Não (F3) |

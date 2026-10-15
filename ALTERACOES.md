@@ -1,5 +1,6 @@
 # Alterações
 
+- [Rodada 8 — F2: autonomia dos agentes](#rodada-8--f2-autonomia-dos-agentes)
 - [Rodada 7 — F1: ambiente compartilhado](#rodada-7--f1-ambiente-compartilhado)
 - [Rodada 6 — F0: linha de base para o sistema multiagente](#rodada-6--f0-linha-de-base-para-o-sistema-multiagente)
 - [Rodada 5 — Regeneração do módulo e aplicação no ar](#rodada-5--regeneração-do-módulo-e-aplicação-no-ar)
@@ -7,6 +8,78 @@
 - [Rodada 3 — Limites contra repetição sem fim e primeira execução real](#rodada-3--limites-contra-repetição-sem-fim-e-primeira-execução-real)
 - [Rodada 2 — Planejador e Implementadores (backend e frontend)](#rodada-2--planejador-e-implementadores-backend-e-frontend)
 - [Rodada 1 — Integração do Arquiteto-chefe e execução por projeto](#rodada-1--integração-do-arquiteto-chefe-e-execução-por-projeto)
+
+---
+
+## Rodada 8 — F2: autonomia dos agentes
+
+Data: 14/10/2026.
+
+Terceira fase do plano. É a que dá aos agentes as autonomias que a IBM atribui a
+um agente: na chamada de ferramentas e em decidir como chegar a uma saída aceita.
+A ordem das etapas continua fixa. Planejamento e comunicação entre agentes vêm na F3.
+
+### Tools de percepção (`agents/ferramentas.py`)
+São camadas finas sobre `ambiente.Leitura`, só de leitura. Os nomes e as respostas
+são em inglês:
+
+| Tool | O que devolve |
+|---|---|
+| `get_artifact(module, artifact)` | análise, especificação, modelo de dados, arquitetura ou plano já publicados, deste ou de outro módulo |
+| `get_contracts()` | serviços públicos, eventos e endpoints que os outros módulos publicaram |
+| `list_files(prefix, side)` | arquivos de código que já existem |
+| `read_file(path, side)` | conteúdo de um arquivo |
+| `get_signatures(path, side)` | só as assinaturas públicas de um arquivo |
+
+Tools por papel:
+- **Requisitos, Esclarecedor, Modelador e Arquiteto de software:** `get_artifact` e `get_contracts`.
+- **Planejador:** essas duas, mais `list_files` e `get_signatures`.
+- **Implementadores:** as cinco.
+- **Arquiteto-chefe:** nenhuma, porque roda antes de existir ambiente.
+
+O orquestrador abre uma sessão por invocação, com a leitura do ambiente, o módulo,
+o lado e a validação da etapa. Assim, o mesmo agente serve a qualquer módulo.
+
+### Submissão validada dentro do loop
+- A saída estruturada passou a usar `ToolStrategy`. A tool de saída valida a
+  resposta com `validation.py` no momento em que o agente a submete.
+- Se a resposta é reprovada, o agente recebe os erros como resultado da tool e
+  corrige ainda dentro do loop, sem perder o que já leu. Antes, o orquestrador
+  reenviava o prompt inteiro com os erros, e o agente recomeçava do zero.
+- A normalização em código (`reparar_caminhos`) roda antes dessa validação.
+- Cada invocação tem no máximo `LIMITE_CHAMADAS_AGENTE` chamadas ao modelo
+  (`ModelCallLimitMiddleware`), e as mensagens são preservadas para contar tokens.
+  Se o orçamento acaba, a última submissão reprovada vira a saída inválida da
+  tentativa. O orquestrador então re-executa ou grava o `.invalido.json`, como antes.
+- O orquestrador continua sendo o juiz final: ele revalida toda saída aprovada.
+
+### Percepção sob demanda nos Implementadores
+Com autonomia, as dependências do lote vão na mensagem só com as assinaturas
+públicas. O Implementador lê o conteúdo inteiro com `read_file` quando precisa.
+Antes, o orquestrador mandava o conteúdo inteiro até `IMPL_LIMITE_CONTEXTO`.
+
+### Métricas novas
+- `chamadas_modelo`: com autonomia, uma tentativa tem várias chamadas.
+- `tools_por_nome`: quantas vezes cada tool foi chamada.
+
+As reprovações que acontecem dentro do loop contam em `reprovadas` e em
+`erros_por_regra`. O resumo da linha de base mostra essas métricas e passou a
+ignorar execuções incompletas.
+
+### Ablação
+`AUTONOMIA=0` volta exatamente ao comportamento da linha de base, sem tools e com
+a validação só no orquestrador. Isso permite comparar as duas versões na F7.
+
+### Verificação
+- 136 testes. Os novos (`tests/test_autonomia.py`) usam o `create_agent` real com um
+  modelo roteirizado e cobrem quatro casos: o agente lê o ambiente, submete,
+  recebe a reprovação, corrige e entrega; o orçamento se esgota; a normalização
+  roda antes da validação; e a montagem dos agentes reais.
+- Uma etapa real com o Gemini (Requisitos do Users, módulo sozinho): o agente
+  chamou `get_contracts` por conta própria e submeteu, aprovado de primeira, com
+  2 chamadas ao modelo, 9,5 mil tokens de entrada e 6,6 mil de saída. Na linha de
+  base, essa etapa usou ~4 mil de entrada no modo projeto. O custo maior era
+  esperado, porque cada chamada reenvia o histórico, e precisa ser medido na F7.
 
 ---
 

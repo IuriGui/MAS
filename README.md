@@ -36,6 +36,10 @@ python main.py --nome "Users" --arquivo exemplos/user.md --de planejador        
 partir de uma etapa lendo do disco os artefatos anteriores.
 `VALIDAR=0` desliga a validação em código (útil para depurar prompts).
 `IMPL_LOTE` (padrão 5) define quantos arquivos cada chamada de Implementador gera.
+`AUTONOMIA` (padrão 1) liga as tools de leitura do ambiente e a submissão validada
+dentro do loop do agente. `AUTONOMIA=0` volta ao comportamento da linha de base.
+`LIMITE_CHAMADAS_AGENTE` (padrão 12) é o orçamento de chamadas ao modelo por
+invocação de um agente autônomo.
 
 ### Linha de base (F0)
 ```bash
@@ -70,7 +74,8 @@ Rodando um módulo sozinho, a base, o código e o `ambiente.jsonl` ficam em `sai
 
 ## Estrutura
 - `system_prompts/` regras de cada agente + `templates.py` (mensagens com os dados)
-- `agents/` um agente por arquivo (`get_agente(contexto)`)
+- `agents/` um agente por arquivo (`get_agente(contexto)`) · `agents/ferramentas.py`
+  tools de leitura do ambiente por papel e submissão validada no loop do agente
 - `schemas.py` contratos entre agentes · `validation.py` regras em código
 - `projeto.py` Arquiteto-chefe + base + vários módulos · `pipeline.py` um módulo
 - `ambiente.py` ambiente compartilhado: o orquestrador publica o que foi aprovado;

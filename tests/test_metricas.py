@@ -126,3 +126,14 @@ def test_agrega_execucoes(tmp_path):
     assert "# Linha de base" in md
     assert "| Users | 1/2 | esclarecedor (1x) |" in md
     assert "Mensagens entre agentes: 0" in md
+    assert r["tools_por_etapa"] == []  # agentes falsos não chamam tools
+
+
+def test_ignora_execucao_incompleta(tmp_path):
+    _rodar(tmp_path / "execucao_01", falhar_users=False)
+    _rodar(tmp_path / "execucao_02", falhar_users=False)
+    (tmp_path / "execucao_02" / "execucao.json").unlink()  # ainda rodando
+    r = metricas.agregar([metricas.carregar_execucao(p) for p in sorted(tmp_path.iterdir())])
+    assert r["execucoes"] == 1 and r["incompletas"] == ["execucao_02"]
+    assert r["por_etapa"]["requisitos"]["tentativas"]["desvio"] == 0
+    assert "ignoradas por estarem incompletas: execucao_02" in metricas.markdown(r)

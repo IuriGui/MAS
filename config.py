@@ -41,3 +41,13 @@ LIMITE_PASSOS_AGENTE = max(2, int(os.environ.get("LIMITE_PASSOS_AGENTE", "3")))
 # Repetições da biblioteca em erro HTTP (rate limit, 5xx) e timeout por chamada
 MAX_RETRIES_API = max(0, int(os.environ.get("MAX_RETRIES_API", "3")))
 TIMEOUT_API = float(os.environ.get("TIMEOUT_API", "600"))
+
+# --- Autonomia dos agentes (F2) ---------------------------------------------
+# 1 = agentes com tools de leitura do ambiente e submissão validada dentro do
+# próprio loop; 0 = comportamento da linha de base (sem tools), para ablação.
+AUTONOMIA = os.environ.get("AUTONOMIA", "1").lower() not in ("0", "false", "nao", "não")
+
+# Orçamento de chamadas ao modelo por invocação de um agente autônomo (cada
+# leitura do ambiente e cada submissão reprovada gastam uma chamada).
+# Esgotado, o agente para e o orquestrador decide (nova tentativa ou falha).
+LIMITE_CHAMADAS_AGENTE = max(2, int(os.environ.get("LIMITE_CHAMADAS_AGENTE", "12")))

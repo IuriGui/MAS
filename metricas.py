@@ -6,6 +6,8 @@ Registro (usado por execucao.py), por etapa, em metricas[etapa]:
   sem_saida        tentativas sem saída estruturada
   falhas_finais    vezes em que a etapa (ou um lote) esgotou as tentativas
   chamadas_tool    tool calls do agente, fora a da saída estruturada
+  tools_por_nome   chamadas de cada tool
+  chamadas_modelo  respostas do modelo (com autonomia, uma invocação tem várias)
   erros_por_regra  quantas vezes cada regra de validação reprovou uma saída
   input_tokens, output_tokens, segundos; lotes (só nos Implementadores)
 
@@ -22,7 +24,7 @@ from typing import Dict, Iterable, List, Optional
 from layout import slugify
 
 CAMPOS = ("tentativas", "reprovadas", "sem_saida", "falhas_finais", "chamadas_tool",
-          "input_tokens", "output_tokens", "segundos", "lotes")
+          "chamadas_modelo", "input_tokens", "output_tokens", "segundos", "lotes")
 
 
 # ------------------------------------------------------------- registro
@@ -33,6 +35,7 @@ def da_etapa(metricas: dict, etapa: str) -> dict:
         if campo != "lotes":
             m.setdefault(campo, 0.0 if campo == "segundos" else 0)
     m.setdefault("erros_por_regra", {})
+    m.setdefault("tools_por_nome", {})
     return m
 
 
@@ -78,13 +81,28 @@ def _nomes_schemas() -> frozenset:
                      if isinstance(o, type) and issubclass(o, BaseModel))
 
 
-def chamadas_tool(resultado: dict) -> int:
-    """Tool calls nas mensagens do agente, sem a tool da saída estruturada
+def _tools_chamadas(resultado: dict) -> List[str]:
+    """Nomes das tools chamadas, sem a tool da saída estruturada
     (no ToolStrategy do LangChain ela tem o nome do schema)."""
     ignorar = _nomes_schemas()
-    return sum(1 for msg in resultado.get("messages", [])
-               for c in (getattr(msg, "tool_calls", None) or [])
-               if c.get("name") not in ignorar)
+    return [c.get("name") for msg in resultado.get("messages", [])
+            for c in (getattr(msg, "tool_calls", None) or [])
+            if c.get("name") not in ignorar]
+
+
+def chamadas_tool(resultado: dict) -> int:
+    return len(_tools_chamadas(resultado))
+
+
+def registrar_chamadas(m: dict, resultado: dict) -> None:
+    """Soma em m as tool calls (total e por nome) e as respostas do modelo."""
+    nomes = _tools_chamadas(resultado)
+    m["chamadas_tool"] += len(nomes)
+    por_nome = m.setdefault("tools_por_nome", {})
+    for n in nomes:
+        por_nome[n] = por_nome.get(n, 0) + 1
+    m["chamadas_modelo"] = m.get("chamadas_modelo", 0) + sum(
+        1 for msg in resultado.get("messages", []) if getattr(msg, "type", "") == "ai")
 
 
 # ------------------------------------------------------------- leitura
@@ -122,7 +140,10 @@ def carregar_execucao(pasta: Path) -> dict:
             m = _ler(raiz / slugify(nome) / "metricas.json")
             if m:
                 unidades[nome] = m
-    return {"nome": pasta.name, "meta": meta, "unidades": unidades, "status": status}
+    # sem "segundos" no execucao.json: execução em andamento ou interrompida
+    completa = "segundos" in meta
+    return {"nome": pasta.name, "meta": meta, "unidades": unidades, "status": status,
+            "completa": completa}
 
 
 # ------------------------------------------------------------- agregação
@@ -149,6 +170,9 @@ def _por_etapa(execucao: dict) -> Dict[str, dict]:
 
 
 def agregar(execucoes: List[dict]) -> dict:
+    """Resume as execuções completas; as incompletas só são listadas."""
+    incompletas = [e["nome"] for e in execucoes if not e.get("completa", True)]
+    execucoes = [e for e in execucoes if e.get("completa", True)]
     n = len(execucoes)
     por_exec = [_por_etapa(e) for e in execucoes]
 
@@ -175,7 +199,8 @@ def agregar(execucoes: List[dict]) -> dict:
             "segundos_relogio": e["meta"].get("segundos"),
             **{c: round(sum(m[c] for m in pe.values()), 2)
                for c in ("tentativas", "reprovadas", "sem_saida", "falhas_finais",
-                         "chamadas_tool", "input_tokens", "output_tokens", "segundos")},
+                         "chamadas_tool", "chamadas_modelo", "input_tokens",
+                         "output_tokens", "segundos")},
         })
 
     modulos: Dict[str, dict] = {}
@@ -197,9 +222,17 @@ def agregar(execucoes: List[dict]) -> dict:
                     regras[(etapa, r)] = regras.get((etapa, r), 0) + q
     top = sorted(regras.items(), key=lambda kv: (-kv[1], kv[0]))
 
+    tools: Dict[tuple, int] = {}
+    for e in execucoes:
+        for metricas in e["unidades"].values():
+            for etapa, m in metricas.items():
+                for t, q in m.get("tools_por_nome", {}).items():
+                    tools[(etapa, t)] = tools.get((etapa, t), 0) + q
+
     metas = [e["meta"] for e in execucoes]
     return {
         "execucoes": n,
+        "incompletas": incompletas,
         "commits": sorted({m.get("commit") for m in metas if m.get("commit")}),
         "modelos": sorted({m.get("modelo") for m in metas if m.get("modelo")}),
         "config": next((m.get("config") for m in metas if m.get("config")), {}),
@@ -208,6 +241,8 @@ def agregar(execucoes: List[dict]) -> dict:
         "por_modulo": modulos,
         "erros_por_regra": [{"etapa": et, "regra": r, "ocorrencias": q}
                             for (et, r), q in top],
+        "tools_por_etapa": [{"etapa": et, "tool": t, "chamadas": q}
+                            for (et, t), q in sorted(tools.items())],
         # Comunicação entre agentes: não existe na linha de base (planejada na F3)
         "mensagens_entre_agentes": 0,
     }
@@ -229,7 +264,9 @@ def markdown(r: dict) -> str:
     linhas = [
         "# Linha de base",
         "",
-        f"- Execuções: {r['execucoes']}",
+        f"- Execuções: {r['execucoes']}"
+        + (f" (ignoradas por estarem incompletas: {', '.join(r['incompletas'])})"
+           if r.get("incompletas") else ""),
         f"- Modelo(s): {', '.join(r['modelos']) or '-'}",
         f"- Commit(s): {', '.join(c[:10] for c in r['commits']) or '-'}",
         f"- Configuração: {cfg}",
@@ -252,14 +289,16 @@ def markdown(r: dict) -> str:
         "## Por etapa (média ± desvio entre execuções)",
         "",
         "| Etapa | Tentativas | Reprovadas | Sem saída | Falhas finais | "
-        "Taxa de reprovação | Tokens entrada | Tokens saída | Tempo (s) | Chamadas de tool |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "Taxa de reprovação | Chamadas ao modelo | Tokens entrada | Tokens saída | "
+        "Tempo (s) | Chamadas de tool |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for etapa, m in r["por_etapa"].items():
         linhas.append(
             f"| {etapa} | {_ms(m['tentativas'])} | {_ms(m['reprovadas'])} | "
             f"{_ms(m['sem_saida'])} | {_ms(m['falhas_finais'])} | "
-            f"{m['taxa_reprovacao']:.0%} | {_ms(m['input_tokens'], 0)} | "
+            f"{m['taxa_reprovacao']:.0%} | {_ms(m['chamadas_modelo'])} | "
+            f"{_ms(m['input_tokens'], 0)} | "
             f"{_ms(m['output_tokens'], 0)} | {_ms(m['segundos'], 0)} | "
             f"{_ms(m['chamadas_tool'], 0)} |")
     linhas += ["", "## Por módulo", "", "| Módulo | Sucessos | Etapas em que falhou |",
@@ -282,7 +321,12 @@ def markdown(r: dict) -> str:
         "",
         f"- Chamadas de tool: {total_tool}",
         f"- Mensagens entre agentes: {r['mensagens_entre_agentes']} "
-        "(não existem na linha de base; previstas na F3)",
+        "(previstas na F3)",
         "",
     ]
+    if r.get("tools_por_etapa"):
+        linhas += ["| Etapa | Tool | Chamadas |", "|---|---|---|"]
+        linhas += [f"| {x['etapa']} | {x['tool']} | {x['chamadas']} |"
+                   for x in r["tools_por_etapa"]]
+        linhas.append("")
     return "\n".join(linhas)

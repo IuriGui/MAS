@@ -6,6 +6,7 @@ from langgraph.errors import GraphRecursionError
 from pydantic import BaseModel
 
 import metricas as med
+from agents import ferramentas
 from config import LIMITE_PASSOS_AGENTE, VALIDAR
 from layout import slugify
 
@@ -32,29 +33,46 @@ def executar_agente(
     max_tentativas: int,
     modulo: str = "",
     normalizar: Optional[Callable[[BaseModel], None]] = None,
+    leitura=None,
+    lado: Optional[str] = None,
 ) -> Tuple[BaseModel, List[str]]:
     """Invoca o agente; se a validação falhar, re-executa com os erros anexados.
 
     `normalizar` corrige em código, antes de validar, erros mecânicos que não
     valem uma nova chamada (ex.: caminho trocado entre arquivos de um lote).
 
+    Agente autônomo (F2): cada invocação abre uma sessão (agents/ferramentas.py)
+    com a `leitura` do ambiente, o módulo, o `lado` do código e a validação da
+    etapa. O agente consulta o ambiente pelas tools e corrige as submissões
+    reprovadas dentro do próprio loop. Esta função continua sendo o juiz final:
+    revalida a saída e, se o orçamento do agente acabar sem saída aprovada,
+    re-executa com os erros da última submissão reprovada.
+
     Limites (não há repetição sem fim):
     - no máximo `max_tentativas` invocações por etapa;
-    - cada invocação tem no máximo LIMITE_PASSOS_AGENTE passos do grafo, o que
-      corta o retry interno do LangChain quando a saída estruturada não valida;
+    - cada invocação tem no máximo LIMITE_PASSOS_AGENTE passos do grafo (sem
+      autonomia) ou LIMITE_CHAMADAS_AGENTE chamadas ao modelo (com autonomia);
     - erros HTTP são repetidos no máximo MAX_RETRIES_API vezes (agents/_base.py).
     """
+    def validar_submissao(o):
+        if normalizar:
+            normalizar(o)
+        return validar(o)
+
     prompt = mensagem
     obj, erros = None, []
     for tentativa in range(1, max(1, max_tentativas) + 1):
+        s = ferramentas.Sessao(leitura=leitura, modulo=modulo, lado=lado,
+                               validar=validar_submissao if VALIDAR else None)
         t0 = time.time()
-        try:
-            resultado = _invocar(agente, prompt, nome_etapa, modulo, tentativa)
-        except GraphRecursionError:
-            resultado = {"messages": []}
-        if "structured_response" not in resultado:
-            resultado["structured_response"] = None
-        obj_tentativa = resultado["structured_response"]
+        with ferramentas.sessao(s):
+            try:
+                resultado = _invocar(agente, prompt, nome_etapa, modulo, tentativa)
+            except GraphRecursionError:
+                resultado = {"messages": []}
+        obj_tentativa = resultado.get("structured_response")
+        if obj_tentativa is not None:
+            obj_tentativa = ferramentas.para_base(obj_tentativa)
 
         tk = _tokens(resultado)
         m = med.da_etapa(metricas, nome_etapa)
@@ -62,9 +80,21 @@ def executar_agente(
         m["segundos"] = round(m["segundos"] + time.time() - t0, 2)
         m["input_tokens"] += tk["input_tokens"]
         m["output_tokens"] += tk["output_tokens"]
-        m["chamadas_tool"] += med.chamadas_tool(resultado)
+        med.registrar_chamadas(m, resultado)
+        for erros_internos in s.reprovacoes:
+            m["reprovadas"] += 1
+            med.registrar_erros(m, erros_internos)
+        if s.reprovacoes:
+            print(f"  [{nome_etapa}] tentativa {tentativa}: {len(s.reprovacoes)} "
+                  "submissão(ões) reprovada(s) e devolvida(s) ao agente")
 
-        if obj_tentativa is None:
+        if obj_tentativa is None and s.reprovacoes:
+            # orçamento esgotado sem submissão aprovada: a última reprovada fica
+            # como saída da tentativa (como uma resposta reprovada sem autonomia)
+            obj, erros = s.ultima_reprovada, s.reprovacoes[-1]
+            print(f"  [{nome_etapa}] tentativa {tentativa}: orçamento esgotado sem "
+                  f"submissão aprovada: {erros}")
+        elif obj_tentativa is None:
             erros = ["A resposta não seguiu o formato estruturado exigido (JSON do schema)."]
             m["sem_saida"] += 1
             print(f"  [{nome_etapa}] tentativa {tentativa}: sem saída estruturada")
@@ -96,7 +126,8 @@ def _invocar(agente, prompt: str, nome_etapa: str, modulo: str, tentativa: int) 
     return agente.invoke(
         {"messages": [{"role": "user", "content": prompt}]},
         config={
-            "recursion_limit": LIMITE_PASSOS_AGENTE,
+            # agente autônomo traz o próprio teto (agents/_base.py)
+            "recursion_limit": getattr(agente, "limite_passos", LIMITE_PASSOS_AGENTE),
             "run_name": f"{nome_etapa}_tentativa_{tentativa}",
             "tags": [nome_etapa, f"modulo:{slugify(modulo)}"],
             "metadata": {
