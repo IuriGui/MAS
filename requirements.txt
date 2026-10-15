@@ -1,7 +1,7 @@
 langchain>=1.0
 langchain-google-genai
-langgraph            # será usado na fase de orquestração
+langgraph 
 pydantic>=2
-langsmith            # rastreamento (@traceable em pipeline.py)
+langsmith           
 python-dotenv
 pytest
