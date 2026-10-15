@@ -15,6 +15,8 @@ Regras:
   - O disco é a única fonte da verdade: nada fica guardado só em memória.
   - Mensagens diretas entre agentes (F3: consultas, bloqueios, revisões) também
     passam pelo orquestrador e ficam em `mensagens.jsonl`.
+  - Cada ação dos agentes sobre o ambiente (tools usadas, submissões aprovadas e
+    reprovadas) fica em `acessos.jsonl`, para observar o que eles fazem.
 
 """
 import json
@@ -61,6 +63,7 @@ class Ambiente:
         self.arquivo_registro = Path(registro) if registro else self.raiz / "ambiente.jsonl"
         self.arquivo_mensagens = (Path(mensagens) if mensagens
                                   else self.arquivo_registro.parent / "mensagens.jsonl")
+        self.arquivo_acessos = self.arquivo_registro.parent / "acessos.jsonl"
 
     # --------------------------------------------------------- caminhos
     def pasta_modulo(self, modulo: str) -> Path:
@@ -77,7 +80,7 @@ class Ambiente:
     def registrar(self, autor: str, tipo: str, modulo: str, alvos: Iterable[str]) -> None:
         """Anota no registro uma modificação do ambiente."""
         self.arquivo_registro.parent.mkdir(parents=True, exist_ok=True)
-        linha = {"quando": datetime.now().isoformat(timespec="seconds"),
+        linha = {"quando": datetime.now().isoformat(timespec="milliseconds"),
                  "autor": autor, "tipo": tipo, "modulo": modulo, "alvos": list(alvos)}
         with self.arquivo_registro.open("a", encoding="utf-8") as f:
             f.write(json.dumps(linha, ensure_ascii=False) + "\n")
@@ -89,7 +92,7 @@ class Ambiente:
             id=f"M{len(self.mensagens()) + 1:03d}", sender=remetente,
             recipient=destinatario, kind=tipo, module=modulo, content=conteudo,
             in_reply_to=em_resposta_a,
-            sent_at=datetime.now().isoformat(timespec="seconds"))
+            sent_at=datetime.now().isoformat(timespec="milliseconds"))
         self.arquivo_mensagens.parent.mkdir(parents=True, exist_ok=True)
         with self.arquivo_mensagens.open("a", encoding="utf-8") as f:
             f.write(msg.model_dump_json() + "\n")
@@ -101,6 +104,22 @@ class Ambiente:
         todas = [AgentMessage.model_validate_json(l) for l in
                  self.arquivo_mensagens.read_text(encoding="utf-8").splitlines() if l.strip()]
         return [m for m in todas if modulo is None or m.module == modulo]
+
+    def anotar_acesso(self, etapa: str, modulo: str, acao: str, args: dict,
+                      resultado: str) -> None:
+        """Anota uma ação de agente (tool ou submissão) em acessos.jsonl."""
+        linha = {"quando": datetime.now().isoformat(timespec="milliseconds"), "etapa": etapa,
+                 "modulo": modulo, "acao": acao, "args": args,
+                 "resultado_chars": len(resultado), "resultado": resultado[:300]}
+        self.arquivo_acessos.parent.mkdir(parents=True, exist_ok=True)
+        with self.arquivo_acessos.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(linha, ensure_ascii=False) + "\n")
+
+    def acessos(self) -> List[dict]:
+        if not self.arquivo_acessos.is_file():
+            return []
+        return [json.loads(l) for l in
+                self.arquivo_acessos.read_text(encoding="utf-8").splitlines() if l.strip()]
 
     def publicar_contexto(self, contexto: ProjectContext,
                           autor: str = "arquiteto_chefe") -> None:
@@ -190,6 +209,9 @@ class Leitura:
 
     def __init__(self, ambiente: Ambiente):
         self._amb = ambiente
+
+    def anotar(self, etapa: str, modulo: str, acao: str, args: dict, resultado: str) -> None:
+        self._amb.anotar_acesso(etapa, modulo, acao, args, resultado)
 
     def contexto(self) -> str:
         c = self._amb.contexto

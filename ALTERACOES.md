@@ -78,6 +78,25 @@ etapas no meio dos lotes de código fica fora desta fase.
 - Com agentes falsos, o projeto completo gera os mesmos arquivos da F2. Só o campo
   `pendencias` em `projeto.json` é novo.
 
+### Observabilidade
+- **Acessos:** cada tool usada por um agente e cada submissão (aprovada ou
+  reprovada, com os erros) vão para `acessos.jsonl` e aparecem no console como
+  `· etapa → tool(args) [n caracteres]`.
+- **Linha do tempo:** `scripts/acompanhar.py` junta acessos, mensagens e
+  publicações em ordem de horário, inclusive ao vivo com `--seguir`. Os registros
+  passaram a ter horário em milissegundos.
+- **LangSmith:** os traços não apareciam porque o `.env` tinha
+  `LANGSMITH_TRACING=false`, o projeto era `sis` (a chave só enxerga
+  `tcc-multiagente`) e a chave começava com um espaço. Os três foram corrigidos
+  no `.env`, que não é versionado.
+
+### API sobrecarregada
+A primeira tentativa de comparação (F2 × F3) caiu num `503 UNAVAILABLE` do
+Gemini. Agora os erros transitórios da API refazem a invocação depois de esperas
+de 30 s a 8 min (`ESPERAS_API`), sem gastar tentativa. No script da linha de base,
+uma falha fora do sistema marca a execução como interrompida, e o resumo a
+ignora. As execuções que caíram estão em `saida/descartadas/`.
+
 ### Linha de base fechada
 As 3 execuções terminaram (`saida/linha_de_base/resumo.md`), com 24 de 24 módulos
 concluídos e 1 reprovação em todo o processo. O processo carregou o código da F0

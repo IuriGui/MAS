@@ -15,6 +15,8 @@
   artefato. As mensagens passam pelo `Canal` que o orquestrador abre, que as
   registra e decide o que fazer com os bloqueios.
 """
+import functools
+import inspect
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -83,6 +85,7 @@ class Canal:
 
 @dataclass
 class Sessao:
+    etapa: str = ""
     leitura: Optional[Leitura] = None
     modulo: str = ""
     lado: Optional[str] = None
@@ -109,6 +112,36 @@ def sessao_atual() -> Optional[Sessao]:
     return _SESSAO.get()
 
 
+# ------------------------------------------------------------- observação
+def _resumo_args(args: dict) -> str:
+    return ", ".join(f"{k}={str(v)[:60]!r}" for k, v in args.items())
+
+
+def anotar(acao: str, args: dict, resultado: str) -> None:
+    """Mostra no console e grava em acessos.jsonl uma ação do agente da sessão."""
+    s = sessao_atual()
+    if not s:
+        return
+    print(f"    · {s.etapa or '?'} → {acao}({_resumo_args(args)}) "
+          f"[{len(resultado)} caracteres]")
+    if s.leitura:
+        s.leitura.anotar(s.etapa, s.modulo, acao, args, resultado)
+
+
+def _observado(fn):
+    """Anota cada chamada da tool (nome, argumentos, tamanho da resposta)."""
+    assinatura = inspect.signature(fn)
+
+    @functools.wraps(fn)
+    def envolvida(*args, **kwargs):
+        resultado = fn(*args, **kwargs)
+        ligados = assinatura.bind(*args, **kwargs)
+        ligados.apply_defaults()
+        anotar(fn.__name__, dict(ligados.arguments), str(resultado))
+        return resultado
+    return envolvida
+
+
 # ------------------------------------------------------------- submissão
 class SubmissaoReprovada(Exception):
     """Não é ValueError de propósito: o Pydantic deixa passar sem embrulhar."""
@@ -132,7 +165,9 @@ def com_validacao(schema: type) -> type:
                 if erros:
                     s.reprovacoes.append(list(erros))
                     s.ultima_reprovada = para_base(self)
+                    anotar(f"submit:{schema.__name__}", {}, "REJECTED: " + "; ".join(erros))
                     raise SubmissaoReprovada(erros)
+                anotar(f"submit:{schema.__name__}", {}, "approved")
             return self
 
     Submissao.__name__ = schema.__name__
@@ -187,6 +222,7 @@ def _lado(side: str) -> str:
 
 
 @tool
+@_observado
 def get_artifact(module: str, artifact: str) -> str:
     """Read an artifact that a module already published in the shared environment
     (it passed validation). `artifact` is one of: analysis, specification,
@@ -202,6 +238,7 @@ def get_artifact(module: str, artifact: str) -> str:
 
 
 @tool
+@_observado
 def get_contracts() -> str:
     """List what the OTHER modules already published for others to consume:
     public services (interface, method, parameters, return type), domain events
@@ -214,6 +251,7 @@ def get_contracts() -> str:
 
 
 @tool
+@_observado
 def list_files(prefix: str = "", side: str = "") -> str:
     """List the code files that already exist in the project (base and modules),
     optionally under a path prefix. `side` is backend or frontend (default: the
@@ -223,6 +261,7 @@ def list_files(prefix: str = "", side: str = "") -> str:
 
 
 @tool
+@_observado
 def read_file(path: str, side: str = "") -> str:
     """Read the full content of an existing code file. `side` is backend or
     frontend (default: the side you are working on)."""
@@ -231,6 +270,7 @@ def read_file(path: str, side: str = "") -> str:
 
 
 @tool
+@_observado
 def get_signatures(path: str, side: str = "") -> str:
     """Read only the public signatures (types, constructors, methods, fields,
     exports) of an existing code file. Cheaper than read_file when you only need
@@ -252,6 +292,7 @@ def _destino(recipient: str, permitidos: Tuple[str, ...]):
 
 
 @tool
+@_observado
 def ask_agent(recipient: str, question: str) -> str:
     """Ask a question to the agent that produced an earlier artifact of THIS module
     (e.g. ask the data_modeler why a column is nullable, or the clarifier what a
@@ -272,6 +313,7 @@ def ask_agent(recipient: str, question: str) -> str:
 
 
 @tool
+@_observado
 def report_blocker(recipient: str, problem: str) -> str:
     """Report that an earlier artifact of THIS module has a defect that prevents you
     from doing your job correctly and that you cannot work around within your own

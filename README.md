@@ -66,7 +66,17 @@ Saída do projeto em `saida/<projeto>/`: `0_contexto.json`, `contexto.md`,
 `codigo/backend` e `codigo/frontend` (código de todos os módulos), `ambiente.jsonl`
 (registro de cada publicação no ambiente compartilhado: quem, o quê, quando),
 `mensagens.jsonl` (mensagens entre agentes: perguntas, respostas, bloqueios,
-revisões e pendências) e uma pasta por módulo.
+revisões e pendências), `acessos.jsonl` (cada tool que um agente usou e cada
+submissão, aprovada ou reprovada) e uma pasta por módulo.
+
+### Acompanhar os agentes
+```bash
+python -m scripts.acompanhar saida/f3/execucao_01/sistema --seguir   # ao vivo
+python -m scripts.acompanhar saida/users --modulo Users               # depois
+```
+Mostra, em ordem de horário, o que cada agente leu do ambiente, o que submeteu,
+as mensagens trocadas e o que o orquestrador publicou. Com `LANGSMITH_TRACING=true`
+no `.env`, cada chamada ao modelo e cada tool também aparecem no LangSmith.
 Saída de cada módulo: `1_analise.json`, `2_especificacao.json`,
 `3_modelo_dados.json`, `4_arquitetura.json`, `5_plano.json`, `6_backend.json` e
 `7_frontend.json` (arquivos gerados), `relatorio.md` e `metricas.json`.
@@ -93,6 +103,7 @@ ficam em `saida/<modulo>/`.
 - `ddl.py` migration a partir do modelo · `layout.py` onde cada arquivo pode morar
 - `assinaturas.py` assinaturas públicas de arquivos (contexto dos Implementadores)
 - `execucao.py` invoca agente + valida + nova tentativa
+- `scripts/acompanhar.py` linha do tempo dos agentes no ambiente (acessos, mensagens, publicações)
 - `metricas.py` métricas por etapa (tentativas, reprovações, regras, tools) e agregação
   de execuções · `scripts/linha_de_base.py` linha de base (F0)
 - `render.py` JSON → markdown

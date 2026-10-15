@@ -89,7 +89,7 @@ def executar_agente(
     for tentativa in range(1, max(1, max_tentativas) + 1):
         t0, espera = time.time(), 0.0
         for falha_api in range(len(ESPERAS_API) + 1):
-            s = ferramentas.Sessao(leitura=leitura, modulo=modulo, lado=lado,
+            s = ferramentas.Sessao(etapa=nome_etapa, leitura=leitura, modulo=modulo, lado=lado,
                                    validar=validar_submissao if VALIDAR else None,
                                    canal=canal)
             aguardar = None

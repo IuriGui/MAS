@@ -204,3 +204,26 @@ def test_cria_os_agentes_reais_com_tools(monkeypatch):
         base._agente_cache.cache_clear()
     assert len(ags) == 7
     assert all(a.limite_passos == 4 * base.LIMITE_CHAMADAS_AGENTE + 10 for a in ags.values())
+
+
+def test_acessos_dos_agentes_ficam_registrados(tmp_path, capsys):
+    amb = _ambiente(tmp_path)
+    modelo = ModeloRoteiro(roteiro=[
+        ("get_artifact", {"module": "Catalog", "artifact": "architecture"}),
+        ("ModuleAnalysis", RUIM),
+        ("ModuleAnalysis", VALIDA),
+    ])
+    executar_agente("requisitos", _agente(modelo), "x", valida_escopo, {}, 1,
+                    modulo="Users", leitura=amb.leitura())
+    acessos = amb.acessos()
+    assert [(a["etapa"], a["modulo"], a["acao"]) for a in acessos] == [
+        ("requisitos", "Users", "get_artifact"),
+        ("requisitos", "Users", "submit:ModuleAnalysis"),
+        ("requisitos", "Users", "submit:ModuleAnalysis"),
+    ]
+    assert acessos[0]["args"] == {"module": "Catalog", "artifact": "architecture"}
+    assert acessos[0]["resultado_chars"] > 100
+    assert acessos[1]["resultado"].startswith("REJECTED: Duplicate requirement IDs")
+    assert acessos[2]["resultado"] == "approved"
+    saida = capsys.readouterr().out
+    assert "· requisitos → get_artifact(module='Catalog', artifact='architecture')" in saida
