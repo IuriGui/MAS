@@ -72,6 +72,12 @@ def executar_uma(args, saida: Path) -> Path:
     except PipelineError as e:
         meta["erro"] = str(e)
         print(f"FALHA: {e}")
+    except Exception as e:
+        # falha fora do sistema (ex.: API indisponível): a execução não vale como
+        # medida; o resumo a ignora e o lote segue para a próxima
+        meta["erro"] = f"{type(e).__name__}: {e}"
+        meta["interrompida"] = True
+        print(f"INTERROMPIDA: {type(e).__name__}: {str(e)[:200]}")
     finally:
         meta["segundos"] = round(time.time() - t0, 1)
         (pasta / "execucao.json").write_text(

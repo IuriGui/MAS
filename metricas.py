@@ -140,8 +140,8 @@ def carregar_execucao(pasta: Path) -> dict:
             m = _ler(raiz / slugify(nome) / "metricas.json")
             if m:
                 unidades[nome] = m
-    # sem "segundos" no execucao.json: execução em andamento ou interrompida
-    completa = "segundos" in meta
+    # sem "segundos": em andamento; "interrompida": falha fora do sistema (API...)
+    completa = "segundos" in meta and not meta.get("interrompida")
     # mensagens entre agentes (F3), por tipo
     mensagens: Dict[str, int] = {}
     for arq in pasta.rglob("mensagens.jsonl"):

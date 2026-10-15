@@ -64,3 +64,9 @@ MAX_CONSULTAS_AGENTE = max(0, int(os.environ.get("MAX_CONSULTAS_AGENTE", "3")))
 # Revisões de artefatos (bloqueios atendidos) por módulo. Esgotado o limite, o
 # bloqueio vira pendência para revisão humana e o módulo segue.
 MAX_REVISOES_MODULO = max(0, int(os.environ.get("MAX_REVISOES_MODULO", "2")))
+
+# Espera (segundos) antes de cada nova chamada quando a API do modelo devolve um
+# erro transitório (429, 5xx, "high demand") depois das repetições da biblioteca.
+# Picos de demanda duram minutos; sem isso, um 503 derruba o lote inteiro.
+ESPERAS_API = tuple(int(x) for x in
+                    os.environ.get("ESPERAS_API", "30,60,120,240,480").split(",") if x.strip())

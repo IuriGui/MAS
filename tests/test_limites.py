@@ -128,3 +128,51 @@ def test_modelo_criado_com_retry_http_e_timeout_limitados(monkeypatch):
     base.criar_agente_estruturado("x", ModuleAnalysis)
     assert capturado["max_retries"] == config.MAX_RETRIES_API
     assert capturado["timeout"] == config.TIMEOUT_API > 0
+
+
+# --------------------------------------------------------- API indisponível
+class ErroAPI(Exception):
+    pass
+
+
+class AgenteInstavel:
+    """Falha com erro transitório nas `falhas` primeiras chamadas."""
+
+    def __init__(self, falhas, erro=None):
+        self.falhas, self.chamadas = falhas, 0
+        self.erro = erro or ErroAPI("503 UNAVAILABLE. This model is experiencing high demand.")
+
+    def invoke(self, entrada, config=None):
+        self.chamadas += 1
+        if self.chamadas <= self.falhas:
+            raise self.erro
+        return {"structured_response": spec(), "messages": []}
+
+
+def test_api_indisponivel_espera_e_chama_de_novo(monkeypatch):
+    import execucao
+    esperas = []
+    monkeypatch.setattr(execucao, "ESPERAS_API", (1, 2, 3))
+    monkeypatch.setattr(execucao.time, "sleep", esperas.append)
+    m = {}
+    obj, erros = execucao.executar_agente("t", AgenteInstavel(2), "x", lambda o: [], m, 1)
+    assert erros == [] and esperas == [1, 2]
+    assert m["t"]["tentativas"] == 1  # esperar a API não gasta tentativa
+    assert m["t"]["erros_api"] == 2 and m["t"]["espera_api_s"] == 3
+
+
+def test_api_indisponivel_alem_das_esperas_propaga(monkeypatch):
+    import execucao
+    monkeypatch.setattr(execucao, "ESPERAS_API", (1,))
+    monkeypatch.setattr(execucao.time, "sleep", lambda s: None)
+    with pytest.raises(ErroAPI):
+        execucao.executar_agente("t", AgenteInstavel(5), "x", lambda o: [], {}, 1)
+
+
+def test_erro_que_nao_e_transitorio_propaga_na_hora(monkeypatch):
+    import execucao
+    monkeypatch.setattr(execucao.time, "sleep", lambda s: pytest.fail("não devia esperar"))
+    agente = AgenteInstavel(1, erro=ValueError("chave de API inválida"))
+    with pytest.raises(ValueError):
+        execucao.executar_agente("t", agente, "x", lambda o: [], {}, 1)
+    assert agente.chamadas == 1

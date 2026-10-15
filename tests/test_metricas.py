@@ -137,3 +137,28 @@ def test_ignora_execucao_incompleta(tmp_path):
     assert r["execucoes"] == 1 and r["incompletas"] == ["execucao_02"]
     assert r["por_etapa"]["requisitos"]["tentativas"]["desvio"] == 0
     assert "ignoradas por estarem incompletas: execucao_02" in metricas.markdown(r)
+
+
+def test_ignora_execucao_interrompida(tmp_path):
+    _rodar(tmp_path / "execucao_01", falhar_users=False)
+    _rodar(tmp_path / "execucao_02", falhar_users=False)
+    meta = tmp_path / "execucao_02" / "execucao.json"
+    meta.write_text(json.dumps({**json.loads(meta.read_text()), "interrompida": True,
+                                "erro": "GoogleAPIError: 503 UNAVAILABLE"}))
+    r = metricas.agregar([metricas.carregar_execucao(p) for p in sorted(tmp_path.iterdir())])
+    assert r["execucoes"] == 1 and r["incompletas"] == ["execucao_02"]
+
+
+def test_lote_segue_depois_de_execucao_interrompida(tmp_path, monkeypatch):
+    import argparse
+    from scripts import linha_de_base
+
+    def explode(*a, **k):
+        raise RuntimeError("503 UNAVAILABLE")
+
+    monkeypatch.setattr(linha_de_base, "processar_projeto", explode)
+    args = argparse.Namespace(projeto=linha_de_base.PADRAO_PROJETO, modulos_dir="x",
+                              contexto=None, apenas=None, ate="requisitos")
+    pasta = linha_de_base.executar_uma(args, tmp_path)  # não levanta
+    meta = json.loads((pasta / "execucao.json").read_text())
+    assert meta["interrompida"] and "503" in meta["erro"] and "segundos" in meta

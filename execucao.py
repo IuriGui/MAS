@@ -1,4 +1,5 @@
 """Execução de um agente com validação em código e nova tentativa."""
+import re
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -7,12 +8,29 @@ from pydantic import BaseModel
 
 import metricas as med
 from agents import ferramentas
-from config import LIMITE_PASSOS_AGENTE, VALIDAR
+from config import ESPERAS_API, LIMITE_PASSOS_AGENTE, VALIDAR
 from layout import slugify
 
 
 class PipelineError(RuntimeError):
     pass
+
+
+_TRANSITORIO = re.compile(
+    r"\b(429|500|502|503|504)\b|UNAVAILABLE|RESOURCE_EXHAUSTED|DEADLINE_EXCEEDED|"
+    r"high demand|overloaded|temporarily|timed? ?out", re.I)
+
+
+def erro_transitorio(exc: BaseException) -> bool:
+    """Erro da API que vale esperar e chamar de novo (sobrecarga, cota, 5xx)."""
+    atual, vistas = exc, set()
+    while atual is not None and id(atual) not in vistas:
+        vistas.add(id(atual))
+        codigo = getattr(atual, "status_code", None) or getattr(atual, "code", None)
+        if codigo in (429, 500, 502, 503, 504) or _TRANSITORIO.search(str(atual)):
+            return True
+        atual = atual.__cause__ or atual.__context__
+    return False
 
 
 def _tokens(resultado: dict) -> Dict[str, int]:
@@ -56,7 +74,10 @@ def executar_agente(
     - no máximo `max_tentativas` invocações por etapa;
     - cada invocação tem no máximo LIMITE_PASSOS_AGENTE passos do grafo (sem
       autonomia) ou LIMITE_CHAMADAS_AGENTE chamadas ao modelo (com autonomia);
-    - erros HTTP são repetidos no máximo MAX_RETRIES_API vezes (agents/_base.py).
+    - erros HTTP são repetidos no máximo MAX_RETRIES_API vezes (agents/_base.py);
+      se o erro continua e é transitório (sobrecarga da API), a invocação é refeita
+      depois de cada espera de ESPERAS_API. Isso não conta como tentativa, e o tempo
+      de espera fica fora de `segundos` (vai para `espera_api_s`).
     """
     def validar_submissao(o):
         if normalizar:
@@ -66,15 +87,29 @@ def executar_agente(
     prompt = mensagem
     obj, erros = None, []
     for tentativa in range(1, max(1, max_tentativas) + 1):
-        s = ferramentas.Sessao(leitura=leitura, modulo=modulo, lado=lado,
-                               validar=validar_submissao if VALIDAR else None,
-                               canal=canal)
-        t0 = time.time()
-        with ferramentas.sessao(s):
-            try:
-                resultado = _invocar(agente, prompt, nome_etapa, modulo, tentativa)
-            except GraphRecursionError:
-                resultado = {"messages": []}
+        t0, espera = time.time(), 0.0
+        for falha_api in range(len(ESPERAS_API) + 1):
+            s = ferramentas.Sessao(leitura=leitura, modulo=modulo, lado=lado,
+                                   validar=validar_submissao if VALIDAR else None,
+                                   canal=canal)
+            aguardar = None
+            with ferramentas.sessao(s):
+                try:
+                    resultado = _invocar(agente, prompt, nome_etapa, modulo, tentativa)
+                except GraphRecursionError:
+                    resultado = {"messages": []}
+                except Exception as e:
+                    if falha_api == len(ESPERAS_API) or not erro_transitorio(e):
+                        raise
+                    aguardar = ESPERAS_API[falha_api]
+                    m = med.da_etapa(metricas, nome_etapa)
+                    m["erros_api"] = m.get("erros_api", 0) + 1
+                    print(f"  [{nome_etapa}] API indisponível ({str(e)[:80]}); "
+                          f"nova chamada em {aguardar}s")
+            if aguardar is None:
+                break
+            time.sleep(aguardar)
+            espera += aguardar
         obj_tentativa = resultado.get("structured_response")
         if obj_tentativa is not None:
             obj_tentativa = ferramentas.para_base(obj_tentativa)
@@ -82,7 +117,9 @@ def executar_agente(
         tk = _tokens(resultado)
         m = med.da_etapa(metricas, nome_etapa)
         m["tentativas"] += 1
-        m["segundos"] = round(m["segundos"] + time.time() - t0, 2)
+        m["segundos"] = round(m["segundos"] + time.time() - t0 - espera, 2)
+        if espera:
+            m["espera_api_s"] = m.get("espera_api_s", 0) + espera
         m["input_tokens"] += tk["input_tokens"]
         m["output_tokens"] += tk["output_tokens"]
         med.registrar_chamadas(m, resultado)
