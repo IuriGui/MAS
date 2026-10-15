@@ -20,6 +20,7 @@ Regras:
 
 """
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set
@@ -43,6 +44,21 @@ ARTEFATOS = {
 }
 POR_CHAVE = {chave: (etapa, arquivo, schema)
              for etapa, (chave, arquivo, schema) in ARTEFATOS.items()}
+
+
+# pacote.pacote.Classe (nome qualificado de Java/Kotlin); o pacote é minúsculo e
+# não pode vir colado a outra palavra ou ponto (para não pegar "e.g.").
+_QUALIFICADO = re.compile(r"(?<![\w.])(?:[a-z_][a-z0-9_]*\.)+([A-Z][A-Za-z0-9_]*)")
+
+
+def encurtar_tipos(texto: str) -> str:
+    """Troca cada nome qualificado pelo nome da classe, em qualquer posição.
+
+    Preserva a estrutura dos tipos genéricos:
+      java.util.Optional<com.x.dto.UserDto> -> Optional<UserDto>
+      java.util.Map<java.util.UUID, java.lang.Long> -> Map<UUID, Long>
+    """
+    return _QUALIFICADO.sub(r"\1", texto)
 
 
 def caminhos_em_disco(raiz: Path) -> Set[str]:
@@ -165,11 +181,15 @@ class Ambiente:
         return {e.path for n, a in self.arquiteturas().items()
                 if slugify(n) != slugify(modulo) for e in a.endpoints}
 
-    def contratos(self, exceto: Optional[str] = None) -> List[dict]:
-        """O que cada módulo já publicou para os outros consumirem."""
+    def contratos(self, exceto: Optional[str] = None,
+                  modulo: Optional[str] = None) -> List[dict]:
+        """O que cada módulo já publicou para os outros consumirem (completo).
+        `modulo`: só o deste módulo."""
         saida = []
         for nome, a in self.arquiteturas().items():
             if exceto and slugify(nome) == slugify(exceto):
+                continue
+            if modulo and slugify(nome) != slugify(modulo):
                 continue
             saida.append({
                 "module": nome,
@@ -225,8 +245,33 @@ class Leitura:
             return f"Module '{modulo}' has not published '{chave}' yet."
         return obj.model_dump_json(indent=2)
 
-    def contratos(self, exceto: Optional[str] = None) -> str:
-        return json.dumps(self._amb.contratos(exceto), indent=2, ensure_ascii=False)
+    def contratos(self, exceto: Optional[str] = None, modulo: str = "") -> str:
+        """Sem `modulo`: resumo de uma linha por serviço, nomes dos eventos e
+        endpoints de cada módulo, com tipos encurtados. Com `modulo`: o contrato
+        completo desse módulo (nomes qualificados, propósito, payloads)."""
+        if modulo:
+            detalhe = self._amb.contratos(exceto, modulo=modulo)
+            if not detalhe:
+                nomes = [c["module"] for c in self._amb.contratos(exceto)]
+                return (f"Module '{modulo}' has not published contracts. "
+                        f"Published: {nomes}.")
+            return json.dumps(detalhe[0], indent=2, ensure_ascii=False)
+        linhas = []
+        for c in self._amb.contratos(exceto):
+            linhas.append(c["module"])
+            for sv in c["public_services"]:
+                linhas.append("  service " + encurtar_tipos(
+                    f"{sv['interface']}.{sv['method']}({sv['parameters']}) "
+                    f"-> {sv['return_type']}"))
+            if c["domain_events"]:
+                linhas.append("  events: " + ", ".join(e["name"] for e in c["domain_events"]))
+            if c["endpoints"]:
+                linhas.append("  endpoints: " + ", ".join(c["endpoints"]))
+        if not linhas:
+            return "No other module has published contracts yet."
+        return "\n".join(linhas) + (
+            "\n\nCall get_contracts(module=...) for one module's full contract "
+            "(fully qualified names, purpose, event payloads and triggers).")
 
     def listar_arquivos(self, lado: str, prefixo: str = "") -> str:
         if lado not in LADOS:

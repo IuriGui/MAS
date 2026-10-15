@@ -239,15 +239,19 @@ def get_artifact(module: str, artifact: str) -> str:
 
 @tool
 @_observado
-def get_contracts() -> str:
-    """List what the OTHER modules already published for others to consume:
-    public services (interface, method, parameters, return type), domain events
-    and endpoints. Use the exact names found here instead of inventing them."""
+def get_contracts(module: str = "") -> str:
+    """What the OTHER modules already published for others to consume.
+    Without `module`: one line per public service (short type names), event
+    names and endpoints of every module. With `module`: that module's full
+    contract (fully qualified names, purpose, event payloads and triggers).
+    The message already lists the other modules' public services and events:
+    call this for their endpoints or for the details of one module, not to
+    repeat what you already have. Use the exact names found here."""
     ler = _leitura()
     if not ler:
         return _SEM_AMBIENTE
     s = sessao_atual()
-    return ler.contratos(exceto=s.modulo if s else None)
+    return ler.contratos(exceto=s.modulo if s else None, modulo=module.strip())
 
 
 @tool

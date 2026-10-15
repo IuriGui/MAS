@@ -163,8 +163,9 @@ def test_tools_usam_a_sessao(tmp_path):
     assert ferramentas.get_contracts.invoke({}) == ferramentas._SEM_AMBIENTE
     s = ferramentas.Sessao(leitura=amb.leitura(), modulo="Users", lado="frontend")
     with ferramentas.sessao(s):
-        contratos = json.loads(ferramentas.get_contracts.invoke({}))
-        assert [c["module"] for c in contratos] == ["Catalog"]  # sem o próprio módulo
+        contratos = ferramentas.get_contracts.invoke({})
+        assert contratos.startswith("Catalog") and "\nUsers" not in contratos  # sem o próprio
+        assert "endpoints: GET /api/v1/products" in contratos
         assert ferramentas.list_files.invoke({}) == "src/api/http.ts"  # lado da sessão
         assert "No backend files" in ferramentas.list_files.invoke({"side": "backend"})
         assert "export function http" in ferramentas.read_file.invoke(

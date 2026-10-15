@@ -1,5 +1,6 @@
 # Alterações
 
+- [Rodada 10 — Contratos enxutos (custo da autonomia)](#rodada-10--contratos-enxutos-custo-da-autonomia)
 - [Rodada 9 — F3: comunicação entre agentes](#rodada-9--f3-comunicação-entre-agentes)
 - [Rodada 8 — F2: autonomia dos agentes](#rodada-8--f2-autonomia-dos-agentes)
 - [Rodada 7 — F1: ambiente compartilhado](#rodada-7--f1-ambiente-compartilhado)
@@ -9,6 +10,65 @@
 - [Rodada 3 — Limites contra repetição sem fim e primeira execução real](#rodada-3--limites-contra-repetição-sem-fim-e-primeira-execução-real)
 - [Rodada 2 — Planejador e Implementadores (backend e frontend)](#rodada-2--planejador-e-implementadores-backend-e-frontend)
 - [Rodada 1 — Integração do Arquiteto-chefe e execução por projeto](#rodada-1--integração-do-arquiteto-chefe-e-execução-por-projeto)
+
+---
+
+## Rodada 10 — Contratos enxutos (custo da autonomia)
+
+Data: 15/10/2026.
+
+### O que a primeira medida da F2 mostrou
+Uma execução completa da F2 (`COMUNICACAO=0`, commit `049feb3`), comparada com a
+média da linha de base, até o Arquiteto de software:
+
+| | Linha de base (média de 3) | F2 v1 (1 execução) |
+|---|---|---|
+| Módulos concluídos | 8/8 | 8/8 |
+| Reprovações | 0,3 | 0 |
+| Tokens de entrada | ~340 mil | 1,75 milhão (~5×) |
+| Tokens de saída | ~247 mil | 530 mil (~2×) |
+| Tempo | ~26 min | 56 min (~2×) |
+| Chamadas de tool | 0 | 50 |
+
+Os agentes usaram o ambiente: todos chamaram `get_contracts`, e o Requisitos e o
+Modelador leram artefatos de outros módulos. Mas o custo subiu ~5×, sem ganho em
+reprovações, que já eram quase zero.
+
+Causa principal: o `get_contracts()` devolvia em JSON completo tudo o que os outros
+módulos publicaram. A resposta crescia com a ordem de construção, até 49 mil
+caracteres no último módulo, e as quatro etapas de cada módulo a chamavam. Boa
+parte disso já estava na mensagem, no resumo dos outros módulos. Como cada
+resposta de tool fica no histórico, ela era reenviada a cada nova chamada ao modelo.
+
+Esta medida fica guardada em `saida/f2_v1/`, como a versão inicial da F2. A
+segunda execução dela foi interrompida às 02:48, quando o WSL parou.
+
+### Mudança
+- **`get_contracts()`** passou a devolver um resumo, com uma linha por serviço
+  público, os nomes dos eventos e os endpoints de cada módulo. No mesmo caso, ele
+  caiu de 49 mil para 10,7 mil caracteres.
+- **`get_contracts(module="X")`** devolve o contrato completo de um módulo, com nomes
+  qualificados, propósito, payloads e gatilhos, quando o agente precisa do detalhe.
+- A descrição da tool diz que os serviços e eventos já estão na mensagem e que ela
+  serve para os endpoints ou para detalhar um módulo.
+- **Tipos encurtados sem perder a estrutura** (`ambiente.encurtar_tipos`): cada nome
+  qualificado vira o nome da classe em qualquer posição, inclusive dentro de
+  genéricos. Por exemplo, `java.util.Optional<com...dto.UserSummaryDto>` vira
+  `Optional<UserSummaryDto>`. Um corte ingênuo, que pega só o que vem depois do
+  último ponto, produziria `UserSummaryDto>`. Isso apagaria o `Optional` e levaria
+  o agente a supor que o usuário sempre existe.
+
+### Verificação
+- 181 testes. Os novos (`tests/test_contratos.py`) cobrem:
+  - genéricos simples e aninhados (`Optional`, `List`, `Map`, `Page`);
+  - listas de parâmetros, vetores e curingas;
+  - textos que não podem mudar (`e.g.`, `version 1.2`, tipos primitivos);
+  - idempotência;
+  - o formato do resumo e o detalhe por módulo;
+  - módulo sem contrato;
+  - a tool com e sem `module`.
+- Nos contratos reais da F2 v1: 48 serviços, 38 com tipos genéricos, nenhum com o
+  tipo quebrado.
 
 ---
 
