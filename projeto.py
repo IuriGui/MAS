@@ -157,11 +157,14 @@ def processar_projeto(
     escolhidos = [n for n in contexto.build_order
                   if not filtro or n.strip().lower() in filtro]
     if implementa and filtro:
-        faltando = dependencias_faltando(contexto, escolhidos, arquiteturas)
+        # módulo já implementado em execução anterior também satisfaz a dependência
+        prontos = [n for n in contexto.build_order
+                   if (pasta / slugify(n) / "6_backend.json").exists()]
+        faltando = dependencias_faltando(contexto, escolhidos + prontos, arquiteturas)
         if faltando:
             raise PipelineError(
                 "Para implementar só " + ", ".join(escolhidos) + ", inclua também "
-                "os módulos de que eles dependem: " + "; ".join(
+                "os módulos de que eles dependem (ou implemente-os antes): " + "; ".join(
                     f"{m} usa {', '.join(d)}" for m, d in faltando.items()))
     if implementa:
         agentes_base = fabrica_agentes(contexto) if fabrica_agentes else None

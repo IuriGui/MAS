@@ -198,3 +198,12 @@ def test_base_so_com_os_modulos_escolhidos(tmp_path):
     msg_base = next(c for c in usados[0]["planejador"].chamadas if "MODE: BASE PLAN" in c)
     assert "MODULES: Users, Catalog\n" in msg_base
     assert "src/modules/sales/routes" not in msg_base  # o roteador não importa Sales
+
+
+def test_dependencia_ja_implementada_no_disco_vale(tmp_path):
+    """Retomada: Users e Catalog já implementados antes; Sales sozinho pode rodar."""
+    processar_projeto("Loja", SISTEMA, contexto=contexto(), apenas=["Users", "Catalog"],
+                      fabrica_agentes=lambda c: agentes(), saida_dir=str(tmp_path))
+    res = processar_projeto("Loja", SISTEMA, contexto=contexto(), apenas=["Sales"],
+                            fabrica_agentes=lambda c: agentes(), saida_dir=str(tmp_path))
+    assert res["modulos"]["Sales"]["status"] == "ok"
