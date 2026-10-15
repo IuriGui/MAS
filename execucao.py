@@ -18,16 +18,25 @@ class PipelineError(RuntimeError):
 
 _TRANSITORIO = re.compile(
     r"\b(429|500|502|503|504)\b|UNAVAILABLE|RESOURCE_EXHAUSTED|DEADLINE_EXCEEDED|"
-    r"high demand|overloaded|temporarily|timed? ?out", re.I)
+    r"high demand|overloaded|temporarily|timed? ?out|"
+    r"server disconnected|connection (reset|aborted|refused|error|closed)", re.I)
+
+# quedas de rede (httpx/httpcore e da biblioteca padrão), pelo nome da classe
+_REDE = {"RemoteProtocolError", "ConnectError", "ReadError", "WriteError",
+         "ReadTimeout", "ConnectTimeout", "PoolTimeout", "NetworkError",
+         "ConnectionError", "ConnectionResetError", "ConnectionAbortedError",
+         "BrokenPipeError", "IncompleteRead"}
 
 
 def erro_transitorio(exc: BaseException) -> bool:
-    """Erro da API que vale esperar e chamar de novo (sobrecarga, cota, 5xx)."""
+    """Erro da API ou da rede que vale esperar e chamar de novo (sobrecarga,
+    cota, 5xx, conexão derrubada)."""
     atual, vistas = exc, set()
     while atual is not None and id(atual) not in vistas:
         vistas.add(id(atual))
         codigo = getattr(atual, "status_code", None) or getattr(atual, "code", None)
-        if codigo in (429, 500, 502, 503, 504) or _TRANSITORIO.search(str(atual)):
+        if (codigo in (429, 500, 502, 503, 504) or type(atual).__name__ in _REDE
+                or _TRANSITORIO.search(str(atual))):
             return True
         atual = atual.__cause__ or atual.__context__
     return False

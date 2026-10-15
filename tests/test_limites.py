@@ -176,3 +176,32 @@ def test_erro_que_nao_e_transitorio_propaga_na_hora(monkeypatch):
     with pytest.raises(ValueError):
         execucao.executar_agente("t", agente, "x", lambda o: [], {}, 1)
     assert agente.chamadas == 1
+
+
+@pytest.mark.parametrize("erro", [
+    "httpx.RemoteProtocolError: Server disconnected without sending a response.",
+    "Connection reset by peer",
+])
+def test_queda_de_conexao_e_transitoria(erro, monkeypatch):
+    import execucao
+    monkeypatch.setattr(execucao, "ESPERAS_API", (1,))
+    monkeypatch.setattr(execucao.time, "sleep", lambda s: None)
+    obj, erros = execucao.executar_agente("t", AgenteInstavel(1, erro=ErroAPI(erro)), "x",
+                                          lambda o: [], {}, 1)
+    assert erros == []
+
+
+def test_queda_de_rede_reconhecida_pela_classe_na_cadeia():
+    import execucao
+
+    class RemoteProtocolError(Exception):
+        pass
+
+    try:
+        try:
+            raise RemoteProtocolError("")
+        except RemoteProtocolError as e:
+            raise RuntimeError("falha no modelo") from e
+    except RuntimeError as externo:
+        assert execucao.erro_transitorio(externo)
+    assert not execucao.erro_transitorio(ValueError("chave de API inválida"))
