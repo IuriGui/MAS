@@ -51,3 +51,16 @@ AUTONOMIA = os.environ.get("AUTONOMIA", "1").lower() not in ("0", "false", "nao"
 # leitura do ambiente e cada submissão reprovada gastam uma chamada).
 # Esgotado, o agente para e o orquestrador decide (nova tentativa ou falha).
 LIMITE_CHAMADAS_AGENTE = max(2, int(os.environ.get("LIMITE_CHAMADAS_AGENTE", "12")))
+
+# --- Comunicação entre agentes (F3) -----------------------------------------
+# 1 = agentes podem consultar (ask_agent) e reportar bloqueios (report_blocker)
+# aos donos dos artefatos anteriores do módulo; 0 = só a autonomia da F2.
+# Só tem efeito com AUTONOMIA=1.
+COMUNICACAO = os.environ.get("COMUNICACAO", "1").lower() not in ("0", "false", "nao", "não")
+
+# Perguntas que um agente pode fazer por invocação.
+MAX_CONSULTAS_AGENTE = max(0, int(os.environ.get("MAX_CONSULTAS_AGENTE", "3")))
+
+# Revisões de artefatos (bloqueios atendidos) por módulo. Esgotado o limite, o
+# bloqueio vira pendência para revisão humana e o módulo segue.
+MAX_REVISOES_MODULO = max(0, int(os.environ.get("MAX_REVISOES_MODULO", "2")))

@@ -35,6 +35,7 @@ def executar_agente(
     normalizar: Optional[Callable[[BaseModel], None]] = None,
     leitura=None,
     lado: Optional[str] = None,
+    canal=None,
 ) -> Tuple[BaseModel, List[str]]:
     """Invoca o agente; se a validação falhar, re-executa com os erros anexados.
 
@@ -47,6 +48,9 @@ def executar_agente(
     reprovadas dentro do próprio loop. Esta função continua sendo o juiz final:
     revalida a saída e, se o orçamento do agente acabar sem saída aprovada,
     re-executa com os erros da última submissão reprovada.
+
+    `canal` (F3): comunicação com os outros agentes do módulo (ask_agent,
+    report_blocker). Os bloqueios ficam em `canal.bloqueios` para o chamador.
 
     Limites (não há repetição sem fim):
     - no máximo `max_tentativas` invocações por etapa;
@@ -63,7 +67,8 @@ def executar_agente(
     obj, erros = None, []
     for tentativa in range(1, max(1, max_tentativas) + 1):
         s = ferramentas.Sessao(leitura=leitura, modulo=modulo, lado=lado,
-                               validar=validar_submissao if VALIDAR else None)
+                               validar=validar_submissao if VALIDAR else None,
+                               canal=canal)
         t0 = time.time()
         with ferramentas.sessao(s):
             try:

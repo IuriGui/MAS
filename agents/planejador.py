@@ -6,4 +6,4 @@ from system_prompts.system_prompts import PLANEJADOR
 
 def get_agente(contexto: ProjectContext):
     return criar_agente_de_modulo(PLANEJADOR, ImplementationPlan, contexto,
-                                  ferramentas.PLANEJAMENTO)
+                                  ferramentas.para("planejador"))

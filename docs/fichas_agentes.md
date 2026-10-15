@@ -137,3 +137,50 @@ O que mudou nos elementos de cada agente com `AUTONOMIA=1`:
 | Comunicação **indireta** (ambiente compartilhado) | Não | Sim: os agentes leem o que os outros publicaram |
 | Autonomia no **planejamento** | Não | Não: a ordem das etapas segue fixa (F3) |
 | Comunicação **direta** (mensagens) | Não | Não (F3) |
+
+## Depois da F3 (comunicação)
+
+Com `COMUNICACAO=1`, os agentes trocam mensagens diretas com os donos dos artefatos
+que consomem:
+
+| Agente | Pode perguntar a (`ask_agent`) | Pode pedir revisão a (`report_blocker`) |
+|---|---|---|
+| Requisitos | ninguém | ninguém |
+| Esclarecedor | Requisitos | Requisitos |
+| Modelador de dados | Esclarecedor | Esclarecedor |
+| Arquiteto de software | Esclarecedor, Modelador | Esclarecedor, Modelador |
+| Planejador | Esclarecedor, Modelador, Arquiteto | Esclarecedor, Modelador, Arquiteto |
+| Implementador backend | Esclarecedor, Modelador, Arquiteto, Planejador | ninguém |
+| Implementador frontend | Esclarecedor, Arquiteto, Planejador | ninguém |
+
+Quem recebe uma pergunta responde em modo consulta (`agents/consultor.py`): com as
+regras do próprio papel, o próprio artefato e as tools de leitura, sem mudar o
+artefato. Um bloqueio leva o grafo do módulo ao nó de revisão:
+
+```mermaid
+graph TD
+    START([início]) --> requisitos
+    requisitos --> esclarecedor
+    esclarecedor --> modelador_dados
+    modelador_dados --> arquiteto_software
+    arquiteto_software --> planejador
+    planejador --> implementacao
+    implementacao --> END([fim])
+    esclarecedor -. bloqueio .-> revisao
+    modelador_dados -. bloqueio .-> revisao
+    arquiteto_software -. bloqueio .-> revisao
+    planejador -. bloqueio .-> revisao
+    revisao -. "volta à etapa seguinte ao dono do artefato" .-> esclarecedor
+    revisao -.-> modelador_dados
+    revisao -.-> arquiteto_software
+    revisao -.-> planejador
+    revisao -. "bloqueio em cadeia" .-> revisao
+```
+
+| Critério | Linha de base | F2 | F3 |
+|---|---|---|---|
+| Comunicação **indireta** (ambiente) | Não | Sim | Sim |
+| Comunicação **direta** (mensagens) | Não | Não | Sim: perguntas e pedidos de revisão |
+| Resolução de conflitos | Não | Não | Sim: quem bloqueia faz o dono revisar o artefato |
+| Tolerância a falhas | A etapa que falha encerra o módulo | Igual | O bloqueio sem solução vira pendência e o módulo segue |
+| Autonomia no **planejamento** | Não | Não | Em parte: o caminho no grafo depende das decisões dos agentes |

@@ -13,12 +13,9 @@ Regras:
     modifica o ambiente e os outros percebem a modificação.
   - Os agentes só leem, pela fachada `Leitura`, que é a base das tools da F2.
   - O disco é a única fonte da verdade: nada fica guardado só em memória.
+  - Mensagens diretas entre agentes (F3: consultas, bloqueios, revisões) também
+    passam pelo orquestrador e ficam em `mensagens.jsonl`.
 
-Layout em disco (o mesmo de antes do ambiente):
-  <raiz>/0_contexto.json
-  <raiz>/<módulo>/1_analise.json ... 5_plano.json
-  <base>/5_plano.json, 6_backend.json, 7_frontend.json   (padrão: <raiz>/base)
-  <codigo>/backend, <codigo>/frontend                     (padrão: <raiz>/codigo)
 """
 import json
 from datetime import datetime
@@ -27,8 +24,9 @@ from typing import Dict, Iterable, List, Optional, Set
 
 from assinaturas import assinaturas
 from layout import slugify
-from schemas import (FinalSpecification, ImplementationPlan, ModuleAnalysis,
-                     ModuleArchitecture, ModuleDataModel, ProjectContext)
+from schemas import (AgentMessage, FinalSpecification, ImplementationPlan,
+                     ModuleAnalysis, ModuleArchitecture, ModuleDataModel,
+                     ProjectContext)
 
 LADOS = ("backend", "frontend")
 _IGNORAR = {"node_modules", "target", "build", "dist", ".git", ".gradle", ".idea"}
@@ -55,12 +53,14 @@ def caminhos_em_disco(raiz: Path) -> Set[str]:
 class Ambiente:
     def __init__(self, raiz: Path, contexto: Optional[ProjectContext] = None,
                  codigo: Optional[Path] = None, base: Optional[Path] = None,
-                 registro: Optional[Path] = None):
+                 registro: Optional[Path] = None, mensagens: Optional[Path] = None):
         self.raiz = Path(raiz)
         self.contexto = contexto
         self.codigo = Path(codigo) if codigo else self.raiz / "codigo"
         self.base = Path(base) if base else self.raiz / "base"
         self.arquivo_registro = Path(registro) if registro else self.raiz / "ambiente.jsonl"
+        self.arquivo_mensagens = (Path(mensagens) if mensagens
+                                  else self.arquivo_registro.parent / "mensagens.jsonl")
 
     # --------------------------------------------------------- caminhos
     def pasta_modulo(self, modulo: str) -> Path:
@@ -81,6 +81,26 @@ class Ambiente:
                  "autor": autor, "tipo": tipo, "modulo": modulo, "alvos": list(alvos)}
         with self.arquivo_registro.open("a", encoding="utf-8") as f:
             f.write(json.dumps(linha, ensure_ascii=False) + "\n")
+
+    def enviar(self, remetente: str, destinatario: str, tipo: str, modulo: str,
+               conteudo: str, em_resposta_a: Optional[str] = None) -> str:
+        """Registra uma mensagem entre agentes e devolve o id dela."""
+        msg = AgentMessage(
+            id=f"M{len(self.mensagens()) + 1:03d}", sender=remetente,
+            recipient=destinatario, kind=tipo, module=modulo, content=conteudo,
+            in_reply_to=em_resposta_a,
+            sent_at=datetime.now().isoformat(timespec="seconds"))
+        self.arquivo_mensagens.parent.mkdir(parents=True, exist_ok=True)
+        with self.arquivo_mensagens.open("a", encoding="utf-8") as f:
+            f.write(msg.model_dump_json() + "\n")
+        return msg.id
+
+    def mensagens(self, modulo: Optional[str] = None) -> List[AgentMessage]:
+        if not self.arquivo_mensagens.is_file():
+            return []
+        todas = [AgentMessage.model_validate_json(l) for l in
+                 self.arquivo_mensagens.read_text(encoding="utf-8").splitlines() if l.strip()]
+        return [m for m in todas if modulo is None or m.module == modulo]
 
     def publicar_contexto(self, contexto: ProjectContext,
                           autor: str = "arquiteto_chefe") -> None:

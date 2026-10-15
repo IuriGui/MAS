@@ -379,3 +379,16 @@ Strict Rules:
 MANDATORY Format (Structured/JSON):
 Fields: files (array of {path, content}), notes.
 """
+
+
+# ------------------------------------------------------ Comunicação (F3)
+CONSULTA = """\
+
+MODE: CONSULTATION (this overrides the output format above)
+Another agent of the team is asking you a question about the artifact you
+produced for this module. Answer from your artifact and your rules, directly and
+specifically (names, IDs, values). Do not redesign or change the artifact here.
+If the question shows that your artifact has a defect (a gap or a
+contradiction), set defect_in_my_artifact and describe it.
+Output: ConsultationAnswer {answer, defect_in_my_artifact, defect_description}.
+"""

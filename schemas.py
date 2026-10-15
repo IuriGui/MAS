@@ -7,6 +7,10 @@ Modelador de dados  -> ModuleDataModel
 Arquiteto software  -> ModuleArchitecture
 Planejador          -> ImplementationPlan (junção modelo de dados + arquitetura)
 Implementadores     -> GeneratedFiles (um lote de arquivos por chamada)
+
+Comunicação entre agentes (F3):
+Consulta            -> ConsultationAnswer (o dono de um artefato responde a uma pergunta)
+Mensagens           -> AgentMessage (registro em mensagens.jsonl)
 """
 from typing import List, Literal, Optional
 
@@ -419,3 +423,28 @@ class GeneratedFile(BaseModel):
 class GeneratedFiles(BaseModel):
     files: List[GeneratedFile]
     notes: List[str] = Field(description="Decisions or limitations worth recording")
+
+
+# ------------------------------------------------------ Comunicação (F3)
+MessageKind = Literal["question", "answer", "blocker", "resolution", "unresolved"]
+
+
+class AgentMessage(BaseModel):
+    """Mensagem entre agentes, registrada pelo orquestrador em mensagens.jsonl."""
+    id: str
+    sender: str = Field(description="Etapa de quem envia (ou 'orquestrador')")
+    recipient: str = Field(description="Etapa de quem recebe (ou 'revisao_humana')")
+    kind: MessageKind
+    module: str
+    content: str
+    in_reply_to: Optional[str] = None
+    sent_at: str
+
+
+class ConsultationAnswer(BaseModel):
+    answer: str = Field(description="Direct answer to the question, based on your artifact")
+    defect_in_my_artifact: bool = Field(
+        description="True if the question revealed a defect (gap, contradiction) in "
+                    "your own artifact")
+    defect_description: str = Field(
+        default="", description="What is wrong in your artifact, if anything")

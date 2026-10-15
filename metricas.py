@@ -142,8 +142,15 @@ def carregar_execucao(pasta: Path) -> dict:
                 unidades[nome] = m
     # sem "segundos" no execucao.json: execução em andamento ou interrompida
     completa = "segundos" in meta
+    # mensagens entre agentes (F3), por tipo
+    mensagens: Dict[str, int] = {}
+    for arq in pasta.rglob("mensagens.jsonl"):
+        for linha in arq.read_text(encoding="utf-8").splitlines():
+            if linha.strip():
+                tipo = json.loads(linha).get("kind", "?")
+                mensagens[tipo] = mensagens.get(tipo, 0) + 1
     return {"nome": pasta.name, "meta": meta, "unidades": unidades, "status": status,
-            "completa": completa}
+            "completa": completa, "mensagens": mensagens}
 
 
 # ------------------------------------------------------------- agregação
@@ -159,13 +166,15 @@ def _estat(valores: List[float]) -> dict:
 
 
 def _por_etapa(execucao: dict) -> Dict[str, dict]:
-    """Soma, numa execução, os campos de cada etapa em todas as unidades."""
+    """Soma, numa execução, os campos de cada etapa em todas as unidades.
+    `medidos` diz quais campos existiam (execuções antigas não têm todos)."""
     total: Dict[str, dict] = {}
     for metricas in execucao["unidades"].values():
         for etapa, m in metricas.items():
-            t = total.setdefault(etapa, {c: 0 for c in CAMPOS})
+            t = total.setdefault(etapa, {**{c: 0 for c in CAMPOS}, "medidos": set()})
             for c in CAMPOS:
                 t[c] += m.get(c, 0)
+            t["medidos"] |= {c for c in CAMPOS if c in m}
     return total
 
 
@@ -186,6 +195,8 @@ def agregar(execucoes: List[dict]) -> dict:
         tent = sum(l["tentativas"] for l in linhas)
         ruins = sum(l["reprovadas"] + l["sem_saida"] for l in linhas)
         resumo["taxa_reprovacao"] = round(ruins / tent, 3) if tent else 0
+        resumo["nao_medidos"] = sorted(
+            c for c in CAMPOS if not any(c in l.get("medidos", ()) for l in linhas))
         etapas[etapa] = resumo
 
     resumo_exec = []
@@ -243,13 +254,20 @@ def agregar(execucoes: List[dict]) -> dict:
                             for (et, r), q in top],
         "tools_por_etapa": [{"etapa": et, "tool": t, "chamadas": q}
                             for (et, t), q in sorted(tools.items())],
-        # Comunicação entre agentes: não existe na linha de base (planejada na F3)
-        "mensagens_entre_agentes": 0,
+        # Comunicação entre agentes (F3): "unresolved" são pendências do orquestrador
+        "mensagens_entre_agentes": sum(
+            q for e in execucoes for t, q in e.get("mensagens", {}).items()
+            if t != "unresolved"),
+        "mensagens_por_tipo": {
+            t: sum(e.get("mensagens", {}).get(t, 0) for e in execucoes)
+            for t in sorted({t for e in execucoes for t in e.get("mensagens", {})})},
     }
 
 
 # ------------------------------------------------------------- relatório
-def _ms(e: dict, casas: int = 1) -> str:
+def _ms(e: dict, casas: int = 1, medido: bool = True) -> str:
+    if not medido:
+        return "-"
     if not e["desvio"]:
         return f"{e['media']:.{casas}f}"
     return f"{e['media']:.{casas}f} ± {e['desvio']:.{casas}f}"
@@ -297,7 +315,8 @@ def markdown(r: dict) -> str:
         linhas.append(
             f"| {etapa} | {_ms(m['tentativas'])} | {_ms(m['reprovadas'])} | "
             f"{_ms(m['sem_saida'])} | {_ms(m['falhas_finais'])} | "
-            f"{m['taxa_reprovacao']:.0%} | {_ms(m['chamadas_modelo'])} | "
+            f"{m['taxa_reprovacao']:.0%} | "
+            f"{_ms(m['chamadas_modelo'], medido='chamadas_modelo' not in m['nao_medidos'])} | "
             f"{_ms(m['input_tokens'], 0)} | "
             f"{_ms(m['output_tokens'], 0)} | {_ms(m['segundos'], 0)} | "
             f"{_ms(m['chamadas_tool'], 0)} |")
@@ -320,8 +339,12 @@ def markdown(r: dict) -> str:
         "## Interação entre agentes",
         "",
         f"- Chamadas de tool: {total_tool}",
-        f"- Mensagens entre agentes: {r['mensagens_entre_agentes']} "
-        "(previstas na F3)",
+        f"- Mensagens entre agentes: {r['mensagens_entre_agentes']}"
+        + (" (" + ", ".join(f"{t}: {q}" for t, q in r["mensagens_por_tipo"].items()
+                            if t != "unresolved") + ")"
+           if r.get("mensagens_entre_agentes") else ""),
+        f"- Pendências para revisão humana: "
+        f"{r.get('mensagens_por_tipo', {}).get('unresolved', 0)}",
         "",
     ]
     if r.get("tools_por_etapa"):

@@ -6,4 +6,4 @@ from system_prompts.system_prompts import ARQUITETO_SOFTWARE
 
 def get_agente(contexto: ProjectContext):
     return criar_agente_de_modulo(ARQUITETO_SOFTWARE, ModuleArchitecture, contexto,
-                                  ferramentas.ESPECIFICACAO)
+                                  ferramentas.para("arquiteto_software"))

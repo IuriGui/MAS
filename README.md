@@ -40,6 +40,11 @@ partir de uma etapa lendo do disco os artefatos anteriores.
 dentro do loop do agente. `AUTONOMIA=0` volta ao comportamento da linha de base.
 `LIMITE_CHAMADAS_AGENTE` (padrão 12) é o orçamento de chamadas ao modelo por
 invocação de um agente autônomo.
+`COMUNICACAO` (padrão 1) deixa os agentes perguntarem (`ask_agent`) e reportarem
+bloqueios (`report_blocker`) aos donos dos artefatos anteriores do módulo.
+`COMUNICACAO=0` mantém só a autonomia da F2. `MAX_CONSULTAS_AGENTE` (padrão 3) é o
+número de perguntas por invocação e `MAX_REVISOES_MODULO` (padrão 2) é o número de
+bloqueios atendidos por módulo; depois disso, o bloqueio vira pendência.
 
 ### Linha de base (F0)
 ```bash
@@ -59,12 +64,14 @@ Para testar prompts, prefira `--ate planejador` primeiro.
 Saída do projeto em `saida/<projeto>/`: `0_contexto.json`, `contexto.md`,
 `projeto.json` (status de cada módulo), `base/` (plano e manifestos da base),
 `codigo/backend` e `codigo/frontend` (código de todos os módulos), `ambiente.jsonl`
-(registro de cada publicação no ambiente compartilhado: quem, o quê, quando) e uma
-pasta por módulo.
+(registro de cada publicação no ambiente compartilhado: quem, o quê, quando),
+`mensagens.jsonl` (mensagens entre agentes: perguntas, respostas, bloqueios,
+revisões e pendências) e uma pasta por módulo.
 Saída de cada módulo: `1_analise.json`, `2_especificacao.json`,
 `3_modelo_dados.json`, `4_arquitetura.json`, `5_plano.json`, `6_backend.json` e
 `7_frontend.json` (arquivos gerados), `relatorio.md` e `metricas.json`.
-Rodando um módulo sozinho, a base, o código e o `ambiente.jsonl` ficam em `saida/<modulo>/`.
+Rodando um módulo sozinho, a base, o código, o `ambiente.jsonl` e o `mensagens.jsonl`
+ficam em `saida/<modulo>/`.
 
 ## Entradas
 - **Descrição do sistema** (`exemplos/erp/sistema.md`): texto livre com uma seção
@@ -75,9 +82,11 @@ Rodando um módulo sozinho, a base, o código e o `ambiente.jsonl` ficam em `sai
 ## Estrutura
 - `system_prompts/` regras de cada agente + `templates.py` (mensagens com os dados)
 - `agents/` um agente por arquivo (`get_agente(contexto)`) · `agents/ferramentas.py`
-  tools de leitura do ambiente por papel e submissão validada no loop do agente
+  tools de leitura do ambiente por papel, comunicação (`ask_agent`, `report_blocker`)
+  e submissão validada no loop do agente · `agents/consultor.py` agente em modo consulta
 - `schemas.py` contratos entre agentes · `validation.py` regras em código
-- `projeto.py` Arquiteto-chefe + base + vários módulos · `pipeline.py` um módulo
+- `projeto.py` Arquiteto-chefe + base + vários módulos · `pipeline.py` um módulo, como
+  grafo LangGraph com revisão por bloqueio (`diagrama_mermaid()` desenha o grafo)
 - `ambiente.py` ambiente compartilhado: o orquestrador publica o que foi aprovado;
   os agentes leem pela fachada `Leitura` (base das tools da F2)
 - `implementacao.py` Planejador, Implementadores (lotes), base compartilhada

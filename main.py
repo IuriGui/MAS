@@ -23,11 +23,14 @@ def _metricas(metricas: dict, recuo: str = "") -> None:
               f"{m['output_tokens']} tok out, {m['tentativas']} tentativa(s)")
 
 
-def _alertas(alertas, recuo: str = "") -> None:
-    if alertas:
+def _alertas(alertas, recuo: str = "", pendencias=()) -> None:
+    if alertas or pendencias:
         print(f"{recuo}ATENÇÃO — itens para revisão humana:")
         for a in alertas:
             print(f"{recuo}  • {a}")
+        for p in pendencias:
+            print(f"{recuo}  • bloqueio sem resolução ({p['motivo']}): {p['remetente']} "
+                  f"precisa que {p['destino']} resolva: {'; '.join(p['problemas'])}")
 
 
 def rodar_modulo(args, contexto) -> int:
@@ -46,7 +49,7 @@ def rodar_modulo(args, contexto) -> int:
     if "arquivos_backend" in res or "arquivos_frontend" in res:
         print(f"Código em: {res['codigo']}/")
     spec = res.get("especificacao")
-    _alertas(spec.review_alerts if spec else [])
+    _alertas(spec.review_alerts if spec else [], pendencias=res.get("pendencias", []))
     _metricas(res["metricas"])
     return 0
 
@@ -79,7 +82,7 @@ def rodar_projeto(args, contexto) -> int:
         if st["status"] != "ok":
             falhas += 1
             continue
-        _alertas(st["review_alerts"], "  ")
+        _alertas(st["review_alerts"], "  ", st.get("pendencias", []))
         _metricas(st["metricas"], "  ")
     return 1 if falhas else 0
 

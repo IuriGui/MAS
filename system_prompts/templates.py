@@ -270,3 +270,26 @@ def msg_implementador_base(
         f"CONTENT OF FILES THIS BATCH DEPENDS ON:\n{dependencias or NO_FILES}\n\n"
         + _lote(lote)
     )
+
+
+# ------------------------------------------------------ comunicação (F3)
+def msg_consulta(nome: str, remetente: str, artefato, pergunta: str) -> str:
+    """Pergunta de um agente (`remetente`, papel em inglês) ao dono do artefato."""
+    return (
+        f"MODE: CONSULTATION\nMODULE: {nome}\n\n"
+        f"YOUR ARTIFACT (JSON):\n{artefato.model_dump_json(indent=2)}\n\n"
+        f"QUESTION FROM THE {remetente.upper()}:\n{pergunta}"
+    )
+
+
+def msg_revisao(remetente: str, problemas: List[str], anterior) -> str:
+    """Anexo à mensagem normal da etapa quando outro agente reportou um bloqueio."""
+    return (
+        f"\n\nREVISION REQUEST from the {remetente}: your previous output blocks its "
+        "work. Problems reported:\n- " + "\n- ".join(problemas)
+        + f"\n\nYOUR PREVIOUS OUTPUT (JSON):\n{anterior.model_dump_json(indent=2)}\n\n"
+        "Produce a REVISED version that resolves these problems and keeps everything "
+        "else unchanged (keep existing IDs; new items get the next free ID). If a "
+        "reported problem is not really a defect of your output, keep it as it is and "
+        "explain why in your notes or assumptions."
+    )

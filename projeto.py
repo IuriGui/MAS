@@ -188,6 +188,7 @@ def processar_projeto(
             "status": "ok",
             "pasta": res["pasta"],
             "review_alerts": spec.review_alerts if spec else [],
+            "pendencias": res.get("pendencias", []),
             "metricas": res["metricas"],
         }
 

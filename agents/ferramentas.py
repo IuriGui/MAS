@@ -10,16 +10,21 @@
   código (`validation.py`) no momento da submissão. Se reprovada, o agente recebe
   os erros como resultado da tool e corrige dentro do próprio loop, sem perder o
   que já leu. A validação do orquestrador continua como juiz final.
+- **Comunicação (F3):** `ask_agent` pergunta ao dono de um artefato anterior do
+  módulo e recebe a resposta na hora; `report_blocker` pede a revisão desse
+  artefato. As mensagens passam pelo `Canal` que o orquestrador abre, que as
+  registra e decide o que fazer com os bloqueios.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Callable, Iterator, List, Optional
+from typing import Callable, Iterator, List, Optional, Tuple
 
 from langchain_core.tools import tool
 from pydantic import BaseModel, model_validator
 
 from ambiente import Leitura
+from config import COMUNICACAO
 
 # nome em inglês (vocabulário dos agentes) -> chave do artefato no ambiente
 ARTEFATOS_EN = {
@@ -31,6 +36,51 @@ ARTEFATOS_EN = {
 }
 
 
+# etapa -> papel em inglês (como os agentes se chamam entre si)
+PAPEIS = {
+    "requisitos": "requirements_analyst",
+    "esclarecedor": "clarifier",
+    "modelador_dados": "data_modeler",
+    "arquiteto_software": "software_architect",
+    "planejador": "planner",
+    "implementador_backend": "backend_developer",
+    "implementador_frontend": "frontend_developer",
+}
+ETAPA_DO_PAPEL = {v: k for k, v in PAPEIS.items()}
+
+# A quem cada etapa pode perguntar: donos dos artefatos que ela consome.
+CONSULTA = {
+    "esclarecedor": ("requisitos",),
+    "modelador_dados": ("esclarecedor",),
+    "arquiteto_software": ("esclarecedor", "modelador_dados"),
+    "planejador": ("esclarecedor", "modelador_dados", "arquiteto_software"),
+    "implementador_backend": ("esclarecedor", "modelador_dados", "arquiteto_software",
+                              "planejador"),
+    "implementador_frontend": ("esclarecedor", "arquiteto_software", "planejador"),
+}
+# Quem pode pedir revisão (bloqueio). Os Implementadores só perguntam: reabrir
+# etapas no meio dos lotes de código fica fora desta fase.
+BLOQUEIO = {e: d for e, d in CONSULTA.items() if not e.startswith("implementador")}
+
+
+@dataclass
+class Canal:
+    """Canal de comunicação de uma invocação, aberto pelo orquestrador."""
+    etapa: str
+    consultar: Callable[[str, str], str]   # (etapa destino, pergunta) -> resposta
+    bloquear: Callable[[str, str], None]   # (etapa destino, problema): registra
+    max_consultas: int = 3
+    bloqueios: List[Tuple[str, str]] = field(default_factory=list)
+
+    @property
+    def pode_consultar(self) -> Tuple[str, ...]:
+        return CONSULTA.get(self.etapa, ())
+
+    @property
+    def pode_bloquear(self) -> Tuple[str, ...]:
+        return BLOQUEIO.get(self.etapa, ())
+
+
 @dataclass
 class Sessao:
     leitura: Optional[Leitura] = None
@@ -39,6 +89,8 @@ class Sessao:
     validar: Optional[Callable[[BaseModel], List[str]]] = None
     reprovacoes: List[List[str]] = field(default_factory=list)
     ultima_reprovada: Optional[BaseModel] = None  # para diagnóstico (.invalido.json)
+    canal: Optional[Canal] = None
+    consultas: int = 0
 
 
 _SESSAO: ContextVar[Optional[Sessao]] = ContextVar("sessao_agente", default=None)
@@ -187,11 +239,84 @@ def get_signatures(path: str, side: str = "") -> str:
     return ler.assinaturas(_lado(side), path) if ler else _SEM_AMBIENTE
 
 
+_SEM_CANAL = "Communication with other agents is not available in this run."
+
+
+def _destino(recipient: str, permitidos: Tuple[str, ...]):
+    """(etapa, None) se o destinatário é permitido; senão (None, mensagem de erro)."""
+    etapa = ETAPA_DO_PAPEL.get(recipient.strip().lower())
+    if etapa not in permitidos:
+        return None, (f"You cannot address '{recipient}'. Allowed: "
+                      f"{[PAPEIS[e] for e in permitidos]}.")
+    return etapa, None
+
+
+@tool
+def ask_agent(recipient: str, question: str) -> str:
+    """Ask a question to the agent that produced an earlier artifact of THIS module
+    (e.g. ask the data_modeler why a column is nullable, or the clarifier what a
+    requirement means). The recipient answers from its own artifact and does not
+    change it. Ask before guessing an intent that the artifacts do not make clear.
+    The number of questions per run is limited."""
+    s = sessao_atual()
+    c = s.canal if s else None
+    if not c:
+        return _SEM_CANAL
+    etapa, erro = _destino(recipient, c.pode_consultar)
+    if erro:
+        return erro
+    if s.consultas >= c.max_consultas:
+        return "Question budget exhausted for this run: decide with what you have."
+    s.consultas += 1
+    return c.consultar(etapa, question)
+
+
+@tool
+def report_blocker(recipient: str, problem: str) -> str:
+    """Report that an earlier artifact of THIS module has a defect that prevents you
+    from doing your job correctly and that you cannot work around within your own
+    rules (e.g. a table, column, requirement or endpoint you need is missing or
+    contradictory). Be specific: what is wrong and what you need. The recipient
+    will be asked to revise its artifact, and you will run again with the revised
+    version. Even after reporting, finish by submitting your best answer with the
+    current inputs."""
+    s = sessao_atual()
+    c = s.canal if s else None
+    if not c:
+        return _SEM_CANAL
+    etapa, erro = _destino(recipient, c.pode_bloquear)
+    if erro:
+        return erro
+    if (etapa, problem) not in c.bloqueios:
+        c.bloqueios.append((etapa, problem))
+        c.bloquear(etapa, problem)
+    return (f"Blocker sent to the {recipient}. It will be asked to revise its artifact "
+            "and you will run again with the revised version. Now submit your best "
+            "answer with the current inputs.")
+
+
 # tools por papel
 ESPECIFICACAO = (get_artifact, get_contracts)
 PLANEJAMENTO = (get_artifact, get_contracts, list_files, get_signatures)
 IMPLEMENTACAO = (get_artifact, get_contracts, list_files, read_file, get_signatures)
-POR_NOME = {t.name: t for t in IMPLEMENTACAO}
+POR_NOME = {t.name: t for t in IMPLEMENTACAO + (ask_agent, report_blocker)}
+_LEITURA_POR_PAPEL = {
+    "requisitos": ESPECIFICACAO, "esclarecedor": ESPECIFICACAO,
+    "modelador_dados": ESPECIFICACAO, "arquiteto_software": ESPECIFICACAO,
+    "planejador": PLANEJAMENTO,
+    "implementador_backend": IMPLEMENTACAO, "implementador_frontend": IMPLEMENTACAO,
+}
+
+
+def para(etapa: str, comunicacao: bool = COMUNICACAO) -> tuple:
+    """Tools do agente de uma etapa: leitura do ambiente e, com comunicação,
+    ask_agent / report_blocker conforme a quem ele pode se dirigir."""
+    tools = _LEITURA_POR_PAPEL[etapa]
+    if comunicacao and CONSULTA.get(etapa):
+        tools += (ask_agent,)
+    if comunicacao and BLOQUEIO.get(etapa):
+        tools += (report_blocker,)
+    return tools
 
 
 def instrucoes(tools, nome_saida: str, limite: int) -> str:
@@ -203,6 +328,16 @@ def instrucoes(tools, nome_saida: str, limite: int) -> str:
             "already produced and the project accepted. Use the read-only tools "
             f"({', '.join(t.name for t in tools)}) to look up whatever you need that "
             "is not in the message. Do not guess names, signatures or files: read them.")
+    nomes = {t.name for t in tools}
+    if "ask_agent" in nomes:
+        partes.append(
+            "- You are one agent of a team. If an earlier artifact of this module is "
+            "unclear, ask its author with ask_agent instead of guessing.")
+    if "report_blocker" in nomes:
+        partes.append(
+            "- If an earlier artifact has a defect you cannot work around (something "
+            "you need is missing or contradictory), call report_blocker with a precise "
+            "description, then still submit your best answer.")
     partes.append(
         f"- You have a budget of about {limite} steps; each tool call and each "
         "submission uses one. Read only what you need.")

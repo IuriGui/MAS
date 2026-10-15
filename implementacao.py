@@ -238,6 +238,7 @@ def executar_lotes(
     max_tentativas: int,
     modulo: str,
     leitura=None,
+    canal=None,
 ) -> List[dict]:
     """Gera os arquivos lote a lote, validando e gravando cada lote.
 
@@ -268,7 +269,7 @@ def executar_lotes(
             etapa, agente, msg, lambda g: validation.validar_arquivos(g, lote, k),
             metricas, max_tentativas, modulo=modulo,
             normalizar=lambda g: reparar_caminhos(g, lote),
-            leitura=leitura, lado=raiz.name)
+            leitura=leitura, lado=raiz.name, canal=canal)
         if erros:
             invalido = pasta / f"{etapa}.lote{i}.invalido.json"
             invalido.write_text(gerados.model_dump_json(indent=2), encoding="utf-8")
@@ -399,7 +400,7 @@ def planejar_modulo(
     modelo: ModuleDataModel, arq: ModuleArchitecture,
     plano_base: Optional[ImplementationPlan], numero_migracao: int,
     outros_modulos: str, agente, metricas: dict, max_tentativas: int,
-    leitura=None,
+    leitura=None, canal=None,
 ):
     lay = layout.layout_modulo(contexto, nome, arq.java_package)
     ddl = gerar_ddl(modelo) if usa_sql(contexto) else ""
@@ -409,7 +410,8 @@ def planejar_modulo(
     return executar_agente(
         "planejador", agente, msg,
         lambda p: validation.validar_plano(p, nome, spec, modelo, arq, contexto, plano_base),
-        metricas, max_tentativas, modulo=nome, leitura=leitura, lado="backend")
+        metricas, max_tentativas, modulo=nome, leitura=leitura, lado="backend",
+        canal=canal)
 
 
 def implementar_backend(
@@ -417,7 +419,7 @@ def implementar_backend(
     modelo: ModuleDataModel, arq: ModuleArchitecture, plano: ImplementationPlan,
     plano_base: Optional[ImplementationPlan], numero_migracao: int,
     codigo_dir: Path, pasta: Path, agente, metricas: dict, max_tentativas: int,
-    leitura=None,
+    leitura=None, canal=None,
 ) -> List[dict]:
     raiz = codigo_dir / "backend"
     lay = layout.layout_modulo(contexto, nome, arq.java_package)
@@ -440,7 +442,7 @@ def implementar_backend(
             api_base),
         lambda: _conhecidos(raiz, [plano, plano_base], "backend", contexto,
                             tabelas=tabelas),
-        pasta, metricas, max_tentativas, nome, leitura=leitura)
+        pasta, metricas, max_tentativas, nome, leitura=leitura, canal=canal)
     return manifesto
 
 
@@ -449,7 +451,7 @@ def implementar_frontend(
     arq: ModuleArchitecture, plano: ImplementationPlan,
     plano_base: Optional[ImplementationPlan], endpoints_externos: Set[str],
     codigo_dir: Path, pasta: Path, agente, metricas: dict, max_tentativas: int,
-    leitura=None,
+    leitura=None, canal=None,
 ) -> List[dict]:
     raiz = codigo_dir / "frontend"
     endpoints = {validation.normalizar_rota(e.path) for e in arq.endpoints}
@@ -461,4 +463,4 @@ def implementar_frontend(
             nome, spec, arq, plano, plano_base, deps, lote, i, n, api_base),
         lambda: _conhecidos(raiz, [plano, plano_base], "frontend", contexto,
                             endpoints=endpoints),
-        pasta, metricas, max_tentativas, nome, leitura=leitura)
+        pasta, metricas, max_tentativas, nome, leitura=leitura, canal=canal)

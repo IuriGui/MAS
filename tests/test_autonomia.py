@@ -177,9 +177,11 @@ def test_tools_usam_a_sessao(tmp_path):
 
 @pytest.mark.parametrize("papel, esperado", [
     ("requisitos", {"get_artifact", "get_contracts"}),
-    ("planejador", {"get_artifact", "get_contracts", "list_files", "get_signatures"}),
+    ("planejador", {"get_artifact", "get_contracts", "list_files", "get_signatures",
+                    "ask_agent", "report_blocker"}),
     ("implementador_backend",
-     {"get_artifact", "get_contracts", "list_files", "read_file", "get_signatures"}),
+     {"get_artifact", "get_contracts", "list_files", "read_file", "get_signatures",
+      "ask_agent"}),
 ])
 def test_tools_por_papel(papel, esperado, monkeypatch):
     import importlib

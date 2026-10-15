@@ -1,5 +1,6 @@
 # Alterações
 
+- [Rodada 9 — F3: comunicação entre agentes](#rodada-9--f3-comunicação-entre-agentes)
 - [Rodada 8 — F2: autonomia dos agentes](#rodada-8--f2-autonomia-dos-agentes)
 - [Rodada 7 — F1: ambiente compartilhado](#rodada-7--f1-ambiente-compartilhado)
 - [Rodada 6 — F0: linha de base para o sistema multiagente](#rodada-6--f0-linha-de-base-para-o-sistema-multiagente)
@@ -8,6 +9,80 @@
 - [Rodada 3 — Limites contra repetição sem fim e primeira execução real](#rodada-3--limites-contra-repetição-sem-fim-e-primeira-execução-real)
 - [Rodada 2 — Planejador e Implementadores (backend e frontend)](#rodada-2--planejador-e-implementadores-backend-e-frontend)
 - [Rodada 1 — Integração do Arquiteto-chefe e execução por projeto](#rodada-1--integração-do-arquiteto-chefe-e-execução-por-projeto)
+
+---
+
+## Rodada 9 — F3: comunicação entre agentes
+
+Data: 15/10/2026.
+
+Quarta fase do plano. A F2 já tinha comunicação indireta: os agentes leem o que os
+outros publicaram no ambiente. A F3 acrescenta a comunicação direta, por
+mensagens, que a IBM descreve como passagem de mensagens e resolução de conflitos.
+
+### Dois tipos de mensagem (`agents/ferramentas.py`)
+- **Consulta:** `ask_agent(recipient, question)` leva uma pergunta ao dono de um
+  artefato anterior do módulo. O dono responde em modo consulta
+  (`agents/consultor.py`), com as regras do próprio papel e o próprio artefato,
+  sem mudá-lo. A resposta volta como resultado da tool, e o fluxo não para. Se o
+  dono admite um defeito, a resposta sugere `report_blocker`. O limite é de
+  `MAX_CONSULTAS_AGENTE` perguntas por invocação.
+- **Bloqueio:** `report_blocker(recipient, problem)` diz que um artefato anterior
+  tem um defeito que o agente não consegue contornar. O agente ainda submete a
+  melhor resposta possível com o que tem.
+
+A quem cada etapa pode se dirigir: aos donos dos artefatos que ela consome. Por
+exemplo, o Arquiteto se dirige ao Esclarecedor e ao Modelador. O Requisitos é o
+primeiro e não tem a quem perguntar. Os Implementadores só perguntam: reabrir
+etapas no meio dos lotes de código fica fora desta fase.
+
+### Orquestrador como grafo LangGraph (`pipeline.py`)
+- O módulo virou um `StateGraph`: requisitos → esclarecedor → modelador_dados →
+  arquiteto_software → planejador → implementacao. Cada etapa que pode bloquear
+  tem uma aresta condicional para o nó **revisao**.
+- **Revisão:** o dono do artefato roda de novo com o pedido (`msg_revisao`: o
+  problema e a saída anterior), a versão revisada é validada e publicada, e todas
+  as etapas entre ele e quem bloqueou rodam de novo. O bloqueio pode ser em
+  cadeia: quem revisa pode bloquear mais acima.
+- **Pendência para revisão humana:** acontece quando o módulo passa de
+  `MAX_REVISOES_MODULO` revisões ou quando a revisão não passa na validação. Nesse
+  caso, o artefato anterior continua valendo, a pendência é registrada e o módulo
+  segue, em vez de falhar. O `main.py` mostra as pendências junto dos alertas.
+- `diagrama_mermaid()` desenha o grafo (está em `docs/fichas_agentes.md`).
+
+### Registro e métricas
+- Toda mensagem passa pelo orquestrador e vai para `mensagens.jsonl`, com id,
+  remetente, destinatário, tipo (question, answer, blocker, resolution,
+  unresolved), conteúdo e a mensagem a que responde.
+- As consultas e revisões têm métricas próprias, por exemplo
+  `modelador_dados_consulta` e `modelador_dados_revisao`.
+- O resumo da linha de base conta as mensagens por tipo e as pendências. Também
+  mostra "-" para métricas que não existiam numa execução antiga.
+
+### Ablação
+`COMUNICACAO=0` desliga só a comunicação direta e mantém a autonomia da F2.
+`AUTONOMIA=0` desliga as duas.
+
+### Verificação
+- 152 testes. Os 16 novos (`tests/test_comunicacao.py`) usam agentes falsos que
+  chamam as tools reais e cobrem:
+  - bloqueio, revisão e nova execução de quem bloqueou;
+  - bloqueio em cadeia;
+  - bloqueio do Planejador ao Arquiteto;
+  - limite de revisões;
+  - revisão reprovada;
+  - consulta com e sem defeito admitido;
+  - destinatário não permitido e orçamento de perguntas;
+  - `COMUNICACAO=0`;
+  - contagem no resumo.
+- Com agentes falsos, o projeto completo gera os mesmos arquivos da F2. Só o campo
+  `pendencias` em `projeto.json` é novo.
+
+### Linha de base fechada
+As 3 execuções terminaram (`saida/linha_de_base/resumo.md`), com 24 de 24 módulos
+concluídos e 1 reprovação em todo o processo. O processo carregou o código da F0
+no início, então o `commit` de cada `execucao.json` foi corrigido para o da tag
+`baseline`. O valor que o script registrou ficou em `commit_registrado`.
 
 ---
 
