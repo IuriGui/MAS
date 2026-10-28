@@ -1,6 +1,6 @@
 """Pipeline de UM módulo, como um grafo LangGraph:
    Requisitos -> Esclarecedor -> Modelador de dados -> Arquiteto de software
-   -> Planejador -> Implementação (backend, frontend)
+   -> Planejador -> Implementação (backend, frontend) -> Build
    com uma aresta condicional de cada etapa para a Revisão (F3).
 
 Todos os agentes recebem o PROJECT CONTEXT (saída do Arquiteto-chefe). Sem
@@ -24,6 +24,10 @@ Comunicação entre agentes (F3), registrada em mensagens.jsonl:
 
 As etapas de implementação estão em implementacao.py. O código gerado vai para
 <codigo_dir>/backend e <codigo_dir>/frontend.
+
+Build (correcao.py): compila o projeto; cada implementador corrige os erros nos
+próprios arquivos e pede mudança (request_change) ao dono de outro arquivo quando
+a causa está lá. O que não compilar vira pendência.
 """
 import json
 from pathlib import Path
@@ -32,13 +36,15 @@ from typing import Callable, Dict, List, Optional, Set, TypedDict
 from langgraph.graph import END, START, StateGraph
 from langsmith import get_current_run_tree, traceable
 
+import correcao
 import implementacao
 import layout
 import validation
 from agents import ferramentas
 from ambiente import ARTEFATOS, Ambiente
-from config import (COMUNICACAO, CONTEXTO_PADRAO, MAX_CONSULTAS_AGENTE,
-                    MAX_REVISOES_MODULO, MAX_TENTATIVAS, SAIDA_DIR)
+from config import (BUILD, COMUNICACAO, CONTEXTO_PADRAO, MAX_CONSULTAS_AGENTE,
+                    MAX_PEDIDOS_BUILD, MAX_REVISOES_MODULO, MAX_RODADAS_BUILD,
+                    MAX_TENTATIVAS, SAIDA_DIR)
 from execucao import PipelineError, executar_agente
 from layout import slugify
 from render import renderizar_relatorio
@@ -46,18 +52,19 @@ from schemas import ImplementationPlan, ProjectContext
 from system_prompts import templates
 
 ETAPAS = ("requisitos", "esclarecedor", "modelador_dados", "arquiteto_software",
-          "planejador", "implementador_backend", "implementador_frontend")
+          "planejador", "implementador_backend", "implementador_frontend", "build")
 ETAPAS_ESPECIFICACAO = ETAPAS[:4]
+ETAPAS_CODIGO = ETAPAS[4:]  # do Planejador em diante: precisam da base
 
 # nós do grafo, na ordem normal (a Revisão fica fora da ordem)
-NOS = ETAPAS_ESPECIFICACAO + ("planejador", "implementacao")
+NOS = ETAPAS_ESPECIFICACAO + ("planejador", "implementacao", "build")
 
 # artefato -> etapas que o consomem
 CONSUMIDORES = {
     "analise": ("esclarecedor",),
-    "especificacao": ETAPAS[2:],
+    "especificacao": ETAPAS[2:7],
     "modelo_dados": ("arquiteto_software", "planejador", "implementador_backend"),
-    "arquitetura": ETAPAS[4:],
+    "arquitetura": ETAPAS[4:7],
     "plano": ETAPAS[5:],
 }
 
@@ -92,7 +99,7 @@ def _caminhos(manifesto) -> list:
 
 def lado_final(ate: str) -> Optional[str]:
     """Até que lado a base precisa estar implementada para rodar até `ate`."""
-    if ate == "implementador_frontend":
+    if ate in ("implementador_frontend", "build"):
         return "frontend"
     if ate == "implementador_backend":
         return "backend"
@@ -122,7 +129,8 @@ def montar_grafo(nos: Dict[str, Callable[[EstadoModulo], dict]]):
         # só vai para a Revisão quem pode reportar bloqueio (o Requisitos não pode)
         destinos = [seguinte(no)] + (["revisao"] if no in ferramentas.BLOQUEIO else [])
         g.add_conditional_edges(no, lambda st: st["proxima"], destinos)
-    g.add_conditional_edges("implementacao", lambda st: st["proxima"], [END])
+    g.add_conditional_edges("implementacao", lambda st: st["proxima"], ["build"])
+    g.add_conditional_edges("build", lambda st: st["proxima"], [END])
     # depois de revisar, volta para a etapa seguinte ao dono do artefato (ou, se a
     # revisão não resolve, para a seguinte a quem bloqueou), ou escala de novo
     g.add_conditional_edges("revisao", lambda st: st["proxima"], list(NOS[1:]) + ["revisao"])
@@ -152,6 +160,7 @@ def processar_modulo(
     endpoints_externos: Optional[Set[str]] = None,
     ambiente: Optional[Ambiente] = None,
     max_revisoes: int = MAX_REVISOES_MODULO,
+    max_rodadas_build: int = MAX_RODADAS_BUILD,
 ) -> dict:
     """Roda o pipeline de um módulo e devolve os artefatos produzidos.
 
@@ -164,9 +173,11 @@ def processar_modulo(
     - `ambiente`: ambiente compartilhado do projeto. Sem ele, cria um só para
       este módulo (saida/<modulo>/, com base e código dentro dessa pasta).
     - `max_revisoes`: bloqueios atendidos por módulo (F3).
+    - `max_rodadas_build`: rodadas de compilação e correção (etapa Build).
     - `agentes` permite injetar agentes falsos em testes. Consultores falsos
       entram com a chave "consulta:<etapa>".
-    O resultado traz `pendencias`: bloqueios que ficaram sem resolução.
+    O resultado traz `pendencias` (bloqueios e erros de build que ficaram sem
+    resolução) e `build` (resumo da etapa Build, se ela rodou).
     """
     for nome_param, valor in (("ate", ate), ("de", de)):
         if valor not in ETAPAS:
@@ -201,7 +212,7 @@ def processar_modulo(
         agentes=agentes, amb=ambiente, contexto=contexto, metricas=metricas,
         max_tentativas=max_tentativas, plano_base=plano_base,
         numero_migracao=numero_migracao, endpoints_externos=endpoints_externos,
-        max_revisoes=max_revisoes)
+        max_revisoes=max_revisoes, max_rodadas_build=max_rodadas_build)
     try:
         return execucao.rodar()
     finally:
@@ -214,7 +225,7 @@ class _Modulo:
 
     def __init__(self, *, nome, descricao, outros, ate, de, agentes, amb, contexto,
                  metricas, max_tentativas, plano_base, numero_migracao,
-                 endpoints_externos, max_revisoes):
+                 endpoints_externos, max_revisoes, max_rodadas_build):
         self.nome, self.descricao, self.outros = nome, descricao, outros
         self.ate, self.de = ate, de
         self.agentes, self.amb, self.contexto = agentes, amb, contexto
@@ -222,6 +233,8 @@ class _Modulo:
         self.plano_base, self.numero_migracao = plano_base, numero_migracao
         self.endpoints_externos = endpoints_externos
         self.max_revisoes = max_revisoes
+        self.max_rodadas_build = max_rodadas_build
+        self.build: Optional[dict] = None
         self.pasta = amb.pasta_modulo(nome)
         self.codigo = amb.codigo
         self.conv = validation.convencoes(contexto)
@@ -231,6 +244,9 @@ class _Modulo:
         self._carregar_anteriores()
 
     # --------------------------------------------------------- base
+    def passo(self, etapa: str) -> str:
+        return f"[{ETAPAS.index(etapa) + 1}/{ETAPAS.index(self.ate) + 1}]"
+
     def roda(self, etapa: str) -> bool:
         return ETAPAS.index(self.de) <= ETAPAS.index(etapa) <= ETAPAS.index(self.ate)
 
@@ -285,8 +301,7 @@ class _Modulo:
 
     def etapa_estruturada(self, etapa, mensagem, validar, canal=None, rotulo=None):
         rotulo = rotulo or etapa
-        print(f"[{ETAPAS.index(etapa) + 1}/{ETAPAS.index(self.ate) + 1}] {rotulo} — "
-              f"{self.nome}")
+        print(f"{self.passo(etapa)} {rotulo} — {self.nome}")
         obj, erros = executar_agente(rotulo, self.agentes[etapa], mensagem, validar,
                                      self.metricas, self.max_tentativas, modulo=self.nome,
                                      leitura=self.amb.leitura(), canal=canal)
@@ -408,14 +423,14 @@ class _Modulo:
         forcada = "planejador" in st.get("forcadas", [])
         forcadas = [x for x in st.get("forcadas", []) if x != "planejador"]
         # Base compartilhada (esqueleto) — só quando há implementação a fazer
-        if any(self.roda(e) for e in ETAPAS[4:]) and self.plano_base is None:
+        if any(self.roda(e) for e in ETAPAS_CODIGO) and self.plano_base is None:
             arq = self.artefatos.get("arquitetura")
             self.plano_base = implementacao.garantir_base(
                 self.contexto, [self.nome], self.amb.base, self.codigo, self.agentes,
                 lado_final(self.ate), self.max_tentativas,
                 arquiteturas={self.nome: arq} if arq else None, ambiente=self.amb)
         if self.roda("planejador") or forcada:
-            print(f"[5/{ETAPAS.index(self.ate) + 1}] planejador — {self.nome}")
+            print(f"{self.passo('planejador')} planejador — {self.nome}")
             canal = self.canal("planejador")
             a = self.artefatos
             plano, erros = implementacao.planejar_modulo(
@@ -435,7 +450,7 @@ class _Modulo:
     def no_implementacao(self, st: EstadoModulo) -> dict:
         a, nome = self.artefatos, self.nome
         if self.roda("implementador_backend"):
-            print(f"[6/{ETAPAS.index(self.ate) + 1}] implementador_backend — {nome}")
+            print(f"{self.passo('implementador_backend')} implementador_backend — {nome}")
             manifesto = implementacao.implementar_backend(
                 nome, self.contexto, a["especificacao"], a["modelo_dados"],
                 a["arquitetura"], a["plano"], self.plano_base, self.numero_migracao,
@@ -449,7 +464,7 @@ class _Modulo:
         if self.roda("implementador_frontend"):
             plano = a["plano"]
             if layout.tem_frontend(self.contexto) and plano.frontend_files:
-                print(f"[7/{ETAPAS.index(self.ate) + 1}] implementador_frontend — {nome}")
+                print(f"{self.passo('implementador_frontend')} implementador_frontend — {nome}")
                 manifesto = implementacao.implementar_frontend(
                     nome, self.contexto, a["especificacao"], a["arquitetura"], plano,
                     self.plano_base, self.endpoints_externos or set(), self.codigo,
@@ -461,14 +476,30 @@ class _Modulo:
                                    _caminhos(manifesto))
                 a["arquivos_frontend"] = manifesto
             else:
-                print(f"[7/7] implementador_frontend — sem frontend para {nome}, pulado")
+                print(f"{self.passo('implementador_frontend')} implementador_frontend — "
+                      f"sem frontend para {nome}, pulado")
+        return {"proxima": "build"}
+
+    def no_build(self, st: EstadoModulo) -> dict:
+        if not (BUILD and self.roda("build")):
+            return {"proxima": END}
+        print(f"{self.passo('build')} build — {self.nome}")
+        etapa = correcao.EtapaBuild(
+            nome=self.nome, amb=self.amb, contexto=self.contexto, agentes=self.agentes,
+            metricas=self.metricas, max_tentativas=self.max_tentativas,
+            plano=self.artefatos.get("plano"), plano_base=self.plano_base, pasta=self.pasta,
+            max_rodadas=self.max_rodadas_build, max_pedidos=MAX_PEDIDOS_BUILD,
+            pendente=self.pendente)
+        self.build = etapa.rodar()
+        (self.pasta / "8_build.json").write_text(
+            json.dumps(self.build, indent=2, ensure_ascii=False), encoding="utf-8")
         return {"proxima": END}
 
     # --------------------------------------------------------- execução
     def rodar(self) -> dict:
         nos = {e: self.no_especificacao(e) for e in ETAPAS_ESPECIFICACAO}
         nos.update(planejador=self.no_planejador, implementacao=self.no_implementacao,
-                   revisao=self.no_revisao)
+                   build=self.no_build, revisao=self.no_revisao)
         montar_grafo(nos).invoke(
             {"forcadas": [], "revisoes": 0, "pedido": None},
             config={"recursion_limit": 20 + 10 * (self.max_revisoes + 1)})
@@ -481,4 +512,5 @@ class _Modulo:
         artefatos["codigo"] = str(self.codigo)
         artefatos["metricas"] = self.metricas
         artefatos["pendencias"] = self.pendencias
+        artefatos["build"] = self.build
         return artefatos

@@ -7,6 +7,7 @@ Modelador de dados  -> ModuleDataModel
 Arquiteto software  -> ModuleArchitecture
 Planejador          -> ImplementationPlan (junção modelo de dados + arquitetura)
 Implementadores     -> GeneratedFiles (um lote de arquivos por chamada)
+Build (correção)    -> BuildFix (edições por trecho nos arquivos do próprio agente)
 
 Comunicação entre agentes (F3):
 Consulta            -> ConsultationAnswer (o dono de um artefato responde a uma pergunta)
@@ -426,7 +427,8 @@ class GeneratedFiles(BaseModel):
 
 
 # ------------------------------------------------------ Comunicação (F3)
-MessageKind = Literal["question", "answer", "blocker", "resolution", "unresolved"]
+MessageKind = Literal["question", "answer", "blocker", "resolution", "unresolved",
+                      "build_failure", "change_request", "declined"]
 
 
 class AgentMessage(BaseModel):
@@ -436,6 +438,9 @@ class AgentMessage(BaseModel):
     recipient: str = Field(description="Etapa de quem recebe (ou 'revisao_humana')")
     kind: MessageKind
     module: str
+    recipient_module: Optional[str] = Field(
+        default=None, description="Módulo de quem recebe, quando não é `module` "
+                                  "(pedido de correção a outro módulo ou à base)")
     content: str
     in_reply_to: Optional[str] = None
     sent_at: str
@@ -448,3 +453,23 @@ class ConsultationAnswer(BaseModel):
                     "your own artifact")
     defect_description: str = Field(
         default="", description="What is wrong in your artifact, if anything")
+
+
+# ------------------------------------------------------ Build (correção)
+class CodeEdit(BaseModel):
+    path: str = Field(description="File to edit, relative to the backend or frontend root")
+    old_text: str = Field(
+        description="Exact text to replace, copied from the CURRENT file without the "
+                    "line-number prefixes. It must occur exactly once in the file: "
+                    "include enough surrounding lines to make it unique")
+    new_text: str = Field(description="Replacement text (empty to delete old_text)")
+
+
+class BuildFix(BaseModel):
+    edits: List[CodeEdit] = Field(
+        description="Edits applied in order; several edits may target the same file")
+    reply: str = Field(
+        default="", description="Only when answering a change request: what you changed, "
+                                "or why you declined")
+    notes: List[str] = Field(default_factory=list,
+                             description="Decisions worth recording")

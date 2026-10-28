@@ -65,6 +65,17 @@ MAX_CONSULTAS_AGENTE = max(0, int(os.environ.get("MAX_CONSULTAS_AGENTE", "3")))
 # bloqueio vira pendência para revisão humana e o módulo segue.
 MAX_REVISOES_MODULO = max(0, int(os.environ.get("MAX_REVISOES_MODULO", "2")))
 
+# --- Build -------------------------------------------------------------------
+# 1 = depois da implementação, compila o projeto (build.py) e os agentes corrigem
+# os erros nos próprios arquivos, pedindo mudança ao dono quando a causa é de outro.
+BUILD = os.environ.get("BUILD", "1").lower() not in ("0", "false", "nao", "não")
+
+# Rodadas de compilação + correção por módulo. Sem progresso, para antes.
+MAX_RODADAS_BUILD = max(1, int(os.environ.get("MAX_RODADAS_BUILD", "3")))
+
+# Pedidos de mudança (request_change) a outros donos por módulo.
+MAX_PEDIDOS_BUILD = max(0, int(os.environ.get("MAX_PEDIDOS_BUILD", "3")))
+
 # Espera (segundos) antes de cada nova chamada quando a API do modelo devolve um
 # erro transitório (429, 5xx, "high demand") depois das repetições da biblioteca.
 # Picos de demanda duram minutos; sem isso, um 503 derruba o lote inteiro.

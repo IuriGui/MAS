@@ -1,5 +1,6 @@
 # Alterações
 
+- [Rodada 12 — Build: os agentes corrigem o próprio código](#rodada-12--build-os-agentes-corrigem-o-próprio-código)
 - [Rodada 11 — Prompts de trabalho em equipe (F3)](#rodada-11--prompts-de-trabalho-em-equipe-f3)
 - [Rodada 10 — Contratos enxutos (custo da autonomia)](#rodada-10--contratos-enxutos-custo-da-autonomia)
 - [Rodada 9 — F3: comunicação entre agentes](#rodada-9--f3-comunicação-entre-agentes)
@@ -11,6 +12,69 @@
 - [Rodada 3 — Limites contra repetição sem fim e primeira execução real](#rodada-3--limites-contra-repetição-sem-fim-e-primeira-execução-real)
 - [Rodada 2 — Planejador e Implementadores (backend e frontend)](#rodada-2--planejador-e-implementadores-backend-e-frontend)
 - [Rodada 1 — Integração do Arquiteto-chefe e execução por projeto](#rodada-1--integração-do-arquiteto-chefe-e-execução-por-projeto)
+
+---
+
+## Rodada 12 — Build: os agentes corrigem o próprio código
+
+Data: 27/10/2026.
+
+### Motivo
+O código da implementação F3 (Users, Catalog, Inventory e base, 247 arquivos)
+nunca tinha sido compilado. Compilado com `build.py`:
+- backend: 1 erro de sintaxe no Catalog (`config/CatalogCacheConfig` num import).
+  Ele escondia um `spring-boot-starter-cache` faltando no `pom.xml` da base (usado
+  por Catalog e Inventory), que por sua vez escondia 23 erros de tipo no Users e no
+  Inventory: construtores de eventos e DTOs do próprio módulo chamados com os
+  argumentos errados;
+- frontend: 9 erros do `tsc` (6 imports ou variáveis sem uso, 1 `r` no lugar de `p`
+  na base, 1 `null` onde o tipo pede `undefined`).
+
+As chamadas entre módulos compilaram. Quase tudo se corrige dentro do próprio
+módulo, e o caso do POM só se corrige com o dono de outro arquivo.
+
+### Mudanças
+- **`build.py`** (antes `compilacao.py`): compila numa cópia, com alterações
+  propostas por cima (`alteracoes`), e marca os erros bloqueantes (sintaxe, pacote
+  inexistente, POM, dependência), que escondem os demais.
+- **Etapa `build`** no grafo do módulo, depois da implementação (`correcao.py`).
+  Em cada rodada:
+  - compila o projeto inteiro, deixando de fora o que é de módulos ainda não
+    implementados;
+  - agrupa os erros por lado e dono do arquivo;
+  - abre uma sessão de correção para cada dono, primeiro os que têm erro bloqueante.
+
+  O laço para quando compila, quando a rodada não melhora (e volta para a melhor
+  versão) ou ao fim de `MAX_RODADAS_BUILD`. O que sobrar vira pendência.
+- **Sessão de correção** (`agents/corretor.py`, prompt `CORRECAO`): o
+  Implementador entrega `BuildFix`, com edições por trecho (`old_text` →
+  `new_text`) nos próprios arquivos. A entrega é compilada na hora e reprovada se:
+  - uma edição não se aplica;
+  - cria erro em arquivo de outro dono, a não ser que só revele erros que um
+    bloqueante escondia;
+  - sobram erros nos arquivos dele sem pedido de mudança.
+- **`request_change`**: pede ao dono de um arquivo de outro módulo ou da base que o
+  altere. O dono responde na hora, numa sessão em modo pedido (prompt
+  `PEDIDO_MUDANCA`): altera o arquivo ou recusa dizendo o que usar. A mudança dele
+  pode quebrar os arquivos de quem pediu (ele vai se adaptar), mas não os de mais
+  ninguém.
+- **Mensagens novas** em `mensagens.jsonl`: `build_failure`, `change_request` e
+  `declined`, além de `resolution`. O campo `recipient_module` aparece quando a
+  mensagem vai para outro módulo.
+- Cada arquivo alterado tem a versão anterior em `<modulo>/build/rodada_N/`. O
+  resumo vai para `<modulo>/8_build.json` e para o `projeto.json`. As chamadas
+  entram em `metricas.json` como `build_backend`, `build_frontend` e
+  `build_<lado>_pedido`.
+- `--ate` passa a ter `build` como padrão, e `--de build` só compila e corrige.
+
+### Verificação
+- 241 testes (17 novos em `tests/test_correcao.py`). O build fica desligado nos
+  testes antigos (`tests/conftest.py`).
+- Ensaio sem API sobre uma cópia do `impl_f3`, com `mvn`/`tsc` reais e agentes
+  roteirizados. O Catalog corrigiu o import e pediu o starter de cache, a base
+  atendeu, e a rodada 2 mostrou os 23 erros que estavam escondidos. Sem mais
+  correções, a rodada 3 parou por falta de progresso e gerou as pendências por
+  módulo.
 
 ---
 

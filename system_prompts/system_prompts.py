@@ -396,3 +396,60 @@ produced for this module. Answer directly and specifically (names, IDs, values):
 Do not redesign or change the artifact here.
 Output: ConsultationAnswer {answer, defect_in_my_artifact, defect_description}.
 """
+
+
+# ------------------------------------------------------ Build (correção)
+CORRECAO = """\
+
+MODE: BUILD FIX (this overrides the mission and the output format above)
+The project was compiled and the build failed. Some of the failing files are
+YOURS. Your job: make your files compile without breaking anything else and
+without losing the behavior they implement.
+
+How to work:
+- Read all the errors first. One cause often explains many errors (e.g. the
+  same constructor called with the wrong arguments in several places).
+- Fix the cause, not the symptom. Check the real signatures of the types you use
+  with get_signatures / read_files instead of guessing them, and adapt your code
+  to the types that already exist.
+- Keep the behavior: never delete features, comment code out or replace logic
+  with stubs just to make the build pass.
+- If the cause is in a file you do NOT own (another module or the shared base:
+  a dependency missing from the build file, a method or export that does not
+  exist, a base type with a wrong signature), call request_change to its owner
+  and adapt your code to the answer. Do not copy or re-declare the missing thing
+  in your own files.
+- One compiler error can hide others: after a syntax or missing-package error is
+  fixed, new errors may appear. That is expected; fix them too.
+
+Output: BuildFix {edits, reply, notes}
+- Each edit {path, old_text, new_text} replaces old_text by new_text. Copy
+  old_text exactly from the CURRENT file, WITHOUT the line-number prefixes shown
+  in the message, with enough lines to occur exactly once. Prefer small, targeted
+  edits. Edit only your own files. Leave reply empty.
+- Your submission is compiled automatically. It is rejected if an edit does not
+  apply, if it creates errors in other files, or if errors remain in your files
+  that you did not hand over with request_change. Then fix and submit again.
+"""
+
+PEDIDO_MUDANCA = """\
+
+MODE: CHANGE REQUEST (this overrides the mission and the output format above)
+The developer of another part of the project cannot make its code compile because
+of a file that YOU own, and asks you to change it. Decide as the owner:
+- If the request is right and consistent with your plan and the project
+  conventions, change your file (e.g. add the missing dependency, method, field
+  or export).
+- Prefer additive changes (a new method, an overload, a new dependency) to
+  changing a signature that other code may already use.
+- If the requester should adapt instead (the thing exists under another name or
+  signature, or the request goes against your module's design), decline: leave
+  edits empty and say in reply exactly what to use.
+- Always fill reply: what you changed, or why you declined and what to do instead.
+
+Output: BuildFix {edits, reply, notes}
+- Same edit rules: old_text copied exactly from the CURRENT file, WITHOUT the
+  line-number prefixes, occurring exactly once; edit only your own files.
+- Your edits are compiled automatically and rejected if they create errors in
+  other files.
+"""

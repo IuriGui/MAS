@@ -29,8 +29,20 @@ def _alertas(alertas, recuo: str = "", pendencias=()) -> None:
         for a in alertas:
             print(f"{recuo}  • {a}")
         for p in pendencias:
+            if p["remetente"] == "build":
+                print(f"{recuo}  • {p['motivo']}: {'; '.join(p['problemas'])}")
+                continue
             print(f"{recuo}  • bloqueio sem resolução ({p['motivo']}): {p['remetente']} "
                   f"precisa que {p['destino']} resolva: {'; '.join(p['problemas'])}")
+
+
+def _build(resumo, recuo: str = "") -> None:
+    if not resumo:
+        return
+    estado = "compila" if resumo["ok"] else f"não compila ({resumo['parada']})"
+    print(f"{recuo}build: {estado}; {len(resumo['rodadas'])} compilação(ões), "
+          f"{resumo['sessoes']} sessão(ões) de correção, {resumo['pedidos']} pedido(s) a "
+          f"outros donos ({resumo['atendidos']} atendido(s), {resumo['recusados']} recusado(s))")
 
 
 def rodar_modulo(args, contexto) -> int:
@@ -50,6 +62,7 @@ def rodar_modulo(args, contexto) -> int:
         print(f"Código em: {res['codigo']}/")
     spec = res.get("especificacao")
     _alertas(spec.review_alerts if spec else [], pendencias=res.get("pendencias", []))
+    _build(res.get("build"))
     _metricas(res["metricas"])
     return 0
 
@@ -83,6 +96,7 @@ def rodar_projeto(args, contexto) -> int:
             falhas += 1
             continue
         _alertas(st["review_alerts"], "  ", st.get("pendencias", []))
+        _build(st.get("build"), "  ")
         _metricas(st["metricas"], "  ")
     return 1 if falhas else 0
 

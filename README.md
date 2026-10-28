@@ -3,7 +3,7 @@
 **Projeto:** Arquiteto-chefe (uma vez) → base de código compartilhada (uma vez)
 → pipeline de cada módulo, na ordem de construção.
 **Módulo:** Requisitos → Esclarecedor → Modelador de Dados → Arquiteto de Software
-→ Planejador → Implementador backend → Implementador frontend.
+→ Planejador → Implementador backend → Implementador frontend → Build.
 
 O Arquiteto-chefe define o PROJECT CONTEXT (stack, convenções, mapa de módulos,
 ordem de construção). Todos os agentes de módulo recebem esse contexto no system
@@ -15,6 +15,10 @@ Implementadores escrevem esses arquivos em lotes. A migration SQL é gerada em
 código a partir do modelo de dados (`ddl.py`), sem LLM.
 Cada agente devolve saída estruturada (`schemas.py`), validada em código
 (`validation.py`) com nova tentativa automática se reprovar.
+No Build (`correcao.py`), o projeto é compilado (`build.py`: `mvn compile`, `tsc`,
+`vite build`). Cada Implementador corrige os erros nos próprios arquivos, com
+edições por trecho. Quando a causa está num arquivo de outro módulo ou da base,
+ele pede a mudança ao dono (`request_change`), que atende ou recusa explicando.
 
 ## Rodando
 ```bash
@@ -32,8 +36,9 @@ python main.py --nome "Users" --arquivo exemplos/erp/modulos/users.md           
 python main.py --nome "Users" --arquivo exemplos/erp/modulos/users.md --ate arquiteto_software  # só especificação
 python main.py --nome "Users" --arquivo exemplos/erp/modulos/users.md --de planejador           # reaproveita 1–4
 ```
-`--ate` define a última etapa (padrão: `implementador_frontend`); `--de` retoma a
-partir de uma etapa lendo do disco os artefatos anteriores.
+`--ate` define a última etapa (padrão: `build`); `--de` retoma a partir de uma
+etapa lendo do disco os artefatos anteriores (`--de build` só compila e corrige o
+código que já existe).
 `VALIDAR=0` desliga a validação em código (útil para depurar prompts).
 `IMPL_LOTE` (padrão 5) define quantos arquivos cada chamada de Implementador gera.
 `AUTONOMIA` (padrão 1) liga as tools de leitura do ambiente e a submissão validada
@@ -45,6 +50,11 @@ bloqueios (`report_blocker`) aos donos dos artefatos anteriores do módulo.
 `COMUNICACAO=0` mantém só a autonomia da F2. `MAX_CONSULTAS_AGENTE` (padrão 3) é o
 número de perguntas por invocação e `MAX_REVISOES_MODULO` (padrão 2) é o número de
 bloqueios atendidos por módulo; depois disso, o bloqueio vira pendência.
+`BUILD` (padrão 1) liga a etapa Build; ela precisa de `mvn` e `npm` na máquina.
+`MAX_RODADAS_BUILD` (padrão 3) é o número de rodadas de compilação e correção por
+módulo, e `MAX_PEDIDOS_BUILD` (padrão 3) o de pedidos de mudança a outros donos.
+O que não compilar vira pendência. Para compilar sem os agentes:
+`python build.py saida/<projeto>/codigo --modulos Users,Catalog`.
 
 ### Linha de base (F0)
 ```bash
@@ -66,7 +76,7 @@ Saída do projeto em `saida/<projeto>/`: `0_contexto.json`, `contexto.md`,
 `codigo/backend` e `codigo/frontend` (código de todos os módulos), `ambiente.jsonl`
 (registro de cada publicação no ambiente compartilhado: quem, o quê, quando),
 `mensagens.jsonl` (mensagens entre agentes: perguntas, respostas, bloqueios,
-revisões e pendências), `acessos.jsonl` (cada tool que um agente usou e cada
+revisões, pendências, falhas de build e pedidos de mudança), `acessos.jsonl` (cada tool que um agente usou e cada
 submissão, aprovada ou reprovada) e uma pasta por módulo.
 
 ### Acompanhar os agentes

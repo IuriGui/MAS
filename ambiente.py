@@ -102,12 +102,15 @@ class Ambiente:
             f.write(json.dumps(linha, ensure_ascii=False) + "\n")
 
     def enviar(self, remetente: str, destinatario: str, tipo: str, modulo: str,
-               conteudo: str, em_resposta_a: Optional[str] = None) -> str:
-        """Registra uma mensagem entre agentes e devolve o id dela."""
+               conteudo: str, em_resposta_a: Optional[str] = None,
+               modulo_destino: Optional[str] = None) -> str:
+        """Registra uma mensagem entre agentes e devolve o id dela.
+        `modulo_destino`: módulo de quem recebe, se não for `modulo`."""
         msg = AgentMessage(
             id=f"M{len(self.mensagens()) + 1:03d}", sender=remetente,
             recipient=destinatario, kind=tipo, module=modulo, content=conteudo,
             in_reply_to=em_resposta_a,
+            recipient_module=modulo_destino if modulo_destino != modulo else None,
             sent_at=datetime.now().isoformat(timespec="milliseconds"))
         self.arquivo_mensagens.parent.mkdir(parents=True, exist_ok=True)
         with self.arquivo_mensagens.open("a", encoding="utf-8") as f:

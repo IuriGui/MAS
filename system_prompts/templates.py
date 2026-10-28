@@ -293,3 +293,44 @@ def msg_revisao(remetente: str, problemas: List[str], anterior) -> str:
         "reported problem is not really a defect of your output, keep it as it is and "
         "explain why in your notes or assumptions."
     )
+
+
+# ------------------------------------------------------ build (correção)
+def com_linhas(conteudo: str) -> str:
+    """Conteúdo com o número de cada linha à esquerda (os erros citam linhas)."""
+    return "\n".join(f"{i:>4}| {l}" for i, l in enumerate(conteudo.splitlines(), 1))
+
+
+def _arquivos_atuais(conteudos: Dict[str, str], plano: Dict[str, PlannedFile]) -> str:
+    blocos = []
+    for caminho, conteudo in conteudos.items():
+        f = plano.get(caminho)
+        papel = f" — {f.purpose}" if f else ""
+        blocos.append(f"=== {caminho}{papel}\n{com_linhas(conteudo)}")
+    return "\n\n".join(blocos)
+
+
+def msg_correcao(dono: str, lado: str, erros: str, conteudos: Dict[str, str],
+                 plano: Dict[str, PlannedFile], historico: List[str]) -> str:
+    """Erros de build nos arquivos de `dono` (módulo ou "base") e o conteúdo atual deles."""
+    quem = "the shared BASE" if dono == "base" else f"module {dono}"
+    anteriores = ("\n\nEARLIER IN THIS BUILD STAGE:\n" + "\n".join(f"- {h}" for h in historico)
+                  if historico else "")
+    return (
+        f"MODE: BUILD FIX\nYOU OWN: the {lado} files of {quem}.\n\n"
+        f"BUILD ERRORS IN YOUR FILES:\n{erros}{anteriores}\n\n"
+        f"CURRENT CONTENT OF YOUR FILES WITH ERRORS (line numbers are not part of the "
+        f"file):\n{_arquivos_atuais(conteudos, plano)}"
+    )
+
+
+def msg_pedido_mudanca(dono: str, lado: str, remetente: str, caminho: str, problema: str,
+                       conteudo: str, plano: Dict[str, PlannedFile]) -> str:
+    """Pedido de `remetente` (papel e módulo) para mudar um arquivo de `dono`."""
+    quem = "the shared BASE" if dono == "base" else f"module {dono}"
+    return (
+        f"MODE: CHANGE REQUEST\nYOU OWN: the {lado} files of {quem}.\n\n"
+        f"REQUEST FROM the {remetente}, about {caminho}:\n{problema}\n\n"
+        f"CURRENT CONTENT (line numbers are not part of the file):\n"
+        f"{_arquivos_atuais({caminho: conteudo}, plano)}"
+    )

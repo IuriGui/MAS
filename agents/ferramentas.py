@@ -14,6 +14,9 @@
   módulo e recebe a resposta na hora; `report_blocker` pede a revisão desse
   artefato. As mensagens passam pelo `Canal` que o orquestrador abre, que as
   registra e decide o que fazer com os bloqueios.
+- **Build:** na correção dos erros de build, `request_change` pede ao dono de um
+  arquivo de outro módulo (ou da base) que o altere; o dono atende ou recusa na
+  hora, e a resposta volta como resultado da tool.
 """
 import functools
 import inspect
@@ -71,10 +74,13 @@ BLOQUEIO = {e: d for e, d in CONSULTA.items() if not e.startswith("implementador
 class Canal:
     """Canal de comunicação de uma invocação, aberto pelo orquestrador."""
     etapa: str
-    consultar: Callable[[str, str], str]   # (etapa destino, pergunta) -> resposta
-    bloquear: Callable[[str, str], None]   # (etapa destino, problema): registra
+    consultar: Optional[Callable[[str, str], str]] = None  # (etapa destino, pergunta) -> resposta
+    bloquear: Optional[Callable[[str, str], None]] = None  # (etapa destino, problema): registra
     max_consultas: int = 3
     bloqueios: List[Tuple[str, str]] = field(default_factory=list)
+    # build: (caminho, problema) -> resposta do dono do arquivo
+    pedir_mudanca: Optional[Callable[[str, str], str]] = None
+    pedidos: int = 0
 
     @property
     def pode_consultar(self) -> Tuple[str, ...]:
@@ -358,11 +364,33 @@ def report_blocker(recipient: str, problem: str) -> str:
             "answer with the current inputs.")
 
 
+@tool
+@_observado
+def request_change(path: str, problem: str) -> str:
+    """Ask the owner of a file that is NOT yours (another module, or the shared
+    base) to change it, when a build error in your files can only be fixed there.
+    Examples: a dependency missing from pom.xml or package.json; a method, field or
+    export your code needs that the other module does not offer; a base type with a
+    wrong signature. `path` is the file to change (same side as yours); `problem`
+    says what is wrong and exactly what you need (names, signatures, the build
+    error). The owner answers right away: it either changes the file or declines
+    and explains (e.g. how you should call it instead). First check with
+    get_signatures/read_files whether you can fix it in your own files: adapting
+    your call is usually right. The number of requests is limited."""
+    s = sessao_atual()
+    c = s.canal if s else None
+    if not c or not c.pedir_mudanca:
+        return _SEM_CANAL
+    c.pedidos += 1
+    return c.pedir_mudanca(path, problem)
+
+
 # tools por papel
 ESPECIFICACAO = (get_artifact, get_contracts)
 PLANEJAMENTO = (get_artifact, get_contracts, list_files, get_signatures)
 IMPLEMENTACAO = (get_artifact, get_contracts, list_files, read_files, get_signatures)
-POR_NOME = {t.name: t for t in IMPLEMENTACAO + (ask_agent, report_blocker)}
+CORRECAO = (list_files, read_files, get_signatures, get_contracts)
+POR_NOME = {t.name: t for t in IMPLEMENTACAO + (ask_agent, report_blocker, request_change)}
 _LEITURA_POR_PAPEL = {
     "requisitos": ESPECIFICACAO, "esclarecedor": ESPECIFICACAO,
     "modelador_dados": ESPECIFICACAO, "arquiteto_software": ESPECIFICACAO,
@@ -413,7 +441,7 @@ class EntregaNoFimDoOrcamento(AgentMiddleware):
         return handler(request)
 
 
-_COMUNICACAO = {"ask_agent", "report_blocker"}
+_COMUNICACAO = {"ask_agent", "report_blocker", "request_change"}
 
 DONOS = {
     "requisitos": "the original analysis and its problems",
