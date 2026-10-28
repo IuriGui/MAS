@@ -76,6 +76,29 @@ módulo, e o caso do POM só se corrige com o dono de outro arquivo.
   correções, a rodada 3 parou por falta de progresso e gerou as pendências por
   módulo.
 
+### Execução real (28/10/2026)
+`--de build` sobre uma cópia do `impl_f3` (`saida/build_f3`), com Users, Catalog e
+Inventory, commit `f9c1535`:
+
+| Rodada | Backend | Frontend | Agentes |
+|---|---|---|---|
+| 1 | 1 erro (sintaxe) | 9 erros | Catalog corrige o import e pede o `spring-boot-starter-cache` à base, que atende; os 4 donos do frontend corrigem |
+| 2 | 23 erros (antes escondidos) | compila | Users e Inventory corrigem os construtores |
+| 3 | compila | compila | — |
+
+- 7 sessões de correção, 1 pedido de mudança (atendido) e 3 entregas reprovadas
+  pelo compilador e corrigidas dentro da sessão.
+- ~1,04 milhão de tokens de entrada e 39 mil de saída, uns 7 minutos de chamadas.
+- Nenhuma funcionalidade apagada. O Users acrescentou aos eventos construtores
+  que leem o `correlationId` do MDC. O Inventory passou **`null` como
+  `correlationId` em 9 eventos**: compila, mas perde o rastreamento.
+
+### Depois da execução
+- Prompt `CORRECAO`: proíbe preencher um argumento que falta com valor fictício
+  (`null`, `""`, `0`, ID qualquer) só para casar com a assinatura. O valor real
+  vem de onde o resto do projeto o obtém; se muitas chamadas precisam dele, o
+  agente cria no próprio tipo um construtor que o obtém.
+
 ---
 
 ## Rodada 11 — Prompts de trabalho em equipe (F3)

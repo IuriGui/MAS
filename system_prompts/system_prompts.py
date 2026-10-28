@@ -414,6 +414,12 @@ How to work:
   to the types that already exist.
 - Keep the behavior: never delete features, comment code out or replace logic
   with stubs just to make the build pass.
+- Never fill a missing argument with a dummy value (null, "", 0, a random or
+  fixed ID, a new empty object) just to match a signature. Get the real value the
+  way the rest of the project does (look at other callers, the base utilities,
+  the request context, the entity fields). If many calls need the same derived
+  value, add to YOUR type a constructor or overload that obtains it properly,
+  instead of repeating a workaround at every call.
 - If the cause is in a file you do NOT own (another module or the shared base:
   a dependency missing from the build file, a method or export that does not
   exist, a base type with a wrong signature), call request_change to its owner
