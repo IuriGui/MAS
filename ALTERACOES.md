@@ -99,6 +99,19 @@ Inventory, commit `f9c1535`:
   vem de onde o resto do projeto o obtém; se muitas chamadas precisam dele, o
   agente cria no próprio tipo um construtor que o obtém.
 
+### Segunda execução, com a regra (28/10/2026)
+Mesma entrada, sobre uma cópia limpa do `impl_f3` (`saida/build_f3_v2`), commit
+`295b216`:
+- Mesmo caminho da primeira: 3 rodadas, 7 sessões, o Catalog pede o starter de
+  cache à base, que atende. Os três módulos compilam.
+- O Inventory deixou de passar `null`: obtém o `correlationId` com
+  `MdcLoggingFilter.getCorrelationId()`, como o Users, e usa os timestamps da
+  própria entidade (`getCreatedAt()`) em vez de `Instant.now()` quando eles
+  existem. Sobraram 2 `null` no Users, e os dois são legítimos: um é o teste de
+  fallback do MDC; o outro é o `userId` de uma tentativa de login com um e-mail
+  que não existe.
+- ~945 mil tokens de entrada e 36 mil de saída (~US$ 0,85 sem o desconto do cache).
+
 ---
 
 ## Rodada 11 — Prompts de trabalho em equipe (F3)
