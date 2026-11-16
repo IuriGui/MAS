@@ -1,8 +1,8 @@
 """Uso:
-  Um módulo (usa o PROJECT CONTEXT de exemplos/contexto_erp.json ou --contexto):
-    python main.py --nome "Users" --arquivo exemplos/user.md            # até o código
-    python main.py --nome "Users" --arquivo exemplos/user.md --ate arquiteto_software
-    python main.py --nome "Users" --arquivo exemplos/user.md --de planejador
+  Um módulo (usa o PROJECT CONTEXT de exemplos/erp/contexto.json ou --contexto):
+    python main.py --nome "Users" --arquivo exemplos/erp/modulos/users.md   # até o código
+    python main.py --nome "Users" --arquivo exemplos/erp/modulos/users.md --ate arquiteto_software
+    python main.py --nome "Users" --arquivo exemplos/erp/modulos/users.md --de planejador
     python main.py --nome "Inventory" --arquivo estoque.md --outros resumo_outros.md
 
   Projeto inteiro (Arquiteto-chefe + todos os módulos na ordem de construção):
@@ -14,7 +14,11 @@
 import argparse
 from pathlib import Path
 
-from pipeline import ETAPAS, PipelineError, carregar_contexto, processar_modulo
+from mas.codigo.layout import slugify
+from mas.config import SAIDA_DIR
+from mas.pipeline.execucao import PipelineError
+from mas.pipeline.modulo import ETAPAS, carregar_contexto, processar_modulo
+from mas.pipeline.projeto import gerar_contexto, processar_projeto
 
 
 def _metricas(metricas: dict, recuo: str = "") -> None:
@@ -52,10 +56,6 @@ def rodar_modulo(args, contexto) -> int:
 
 
 def rodar_projeto(args, contexto) -> int:
-    from projeto import gerar_contexto, processar_projeto
-    from pipeline import slugify
-    from config import SAIDA_DIR
-
     descricao = Path(args.projeto).read_text(encoding="utf-8")
     nome = args.nome or Path(args.projeto).stem
     try:

@@ -1,10 +1,134 @@
 # Alterações
 
+- [Rodada 7 — Organização dos arquivos](#rodada-7--organização-dos-arquivos)
+- [Rodada 6 — Implementadores no sandbox Docker](#rodada-6--implementadores-no-sandbox-docker)
 - [Rodada 5 — Regeneração do módulo e aplicação no ar](#rodada-5--regeneração-do-módulo-e-aplicação-no-ar)
 - [Rodada 4 — Execução completa, compilação do código gerado e correções](#rodada-4--execução-completa-compilação-do-código-gerado-e-correções)
 - [Rodada 3 — Limites contra repetição sem fim e primeira execução real](#rodada-3--limites-contra-repetição-sem-fim-e-primeira-execução-real)
 - [Rodada 2 — Planejador e Implementadores (backend e frontend)](#rodada-2--planejador-e-implementadores-backend-e-frontend)
 - [Rodada 1 — Integração do Arquiteto-chefe e execução por projeto](#rodada-1--integração-do-arquiteto-chefe-e-execução-por-projeto)
+
+---
+
+## Rodada 7 — Organização dos arquivos
+
+Data: 15/11/2026. Não muda o comportamento: os 109 testes passam e os comandos
+do `main.py` são os mesmos (só os caminhos dos exemplos mudaram).
+
+### Por quê
+
+Eram 12 módulos soltos na raiz, com nomes ora em inglês, ora em português. Havia
+10 arquivos de agente com 7 linhas cada, uma demo antiga fora do pipeline e um
+exemplo duplicado. Agora o código fica todo no pacote `mas/`, dividido por papel
+(árvore completa no README):
+
+- `mas/agentes/`: como cada agente é criado, o que recebe e onde roda;
+- `mas/pipeline/`: a orquestração (projeto → módulo → etapas);
+- `mas/codigo/`: o que é feito em código, sem LLM, sobre o código gerado.
+
+### Onde foi parar cada arquivo
+
+As rodadas anteriores citam os caminhos antigos.
+
+| Antes | Agora |
+|---|---|
+| `config.py`, `schemas.py` | `mas/config.py`, `mas/schemas.py` |
+| `validation.py` | `mas/validacao.py` |
+| `render.py` | `mas/relatorio.py` |
+| `agents/*.py` (10 arquivos) | `mas/agentes/fabrica.py` (tabela `AGENTES_DE_MODULO`) |
+| `system_prompts/system_prompts.py` | `mas/agentes/prompts.py` |
+| `system_prompts/templates.py` | `mas/agentes/mensagens.py` |
+| `tools/docker_sandbox.py` | `mas/agentes/sandbox.py` |
+| `projeto.py` | `mas/pipeline/projeto.py` |
+| `pipeline.py` | `mas/pipeline/modulo.py` |
+| `implementacao.py` | `mas/pipeline/implementacao.py` |
+| `execucao.py` | `mas/pipeline/execucao.py` |
+| `layout.py`, `ddl.py`, `assinaturas.py` | `mas/codigo/` |
+| gravação em disco e `reparar_caminhos` (em `implementacao.py`) | `mas/codigo/arquivos.py` |
+| `ColetaSandbox` (em `implementacao.py`) | `mas/codigo/coleta.py` |
+| `criar_agentes`, `ambiente_sandbox` (em `pipeline.py`) | `mas/agentes/fabrica.py` |
+| `exemplos/contexto_erp.json` | `exemplos/erp/contexto.json` |
+| `tests/test_pipeline.py` | `tests/test_especificacao.py` |
+| fábricas de teste em `test_pipeline.py` e `test_projeto.py` | `tests/fakes.py` |
+
+Renomeações dentro do código: `_destino` → `caminho_seguro`; no prompt,
+`sandbox()` → `regras_sandbox()` (para não confundir com o módulo
+`sandbox.py`); `_executar` (apelido de compatibilidade) → `executar_agente`.
+
+### Removidos
+
+Os arquivos removidos continuam no histórico do git (commit `121a11a`).
+
+- `scripts/arquiteto_chefe.py`: fazia o mesmo que
+  `python main.py --projeto <arquivo> --so-contexto`;
+- `scripts/demo_file_tools.py` e `tools/manipulacao_de_arquivos.py`: demo antiga,
+  fora do pipeline. Os Implementadores usam as tools de arquivo do deepagents
+  no sandbox. Saíram junto a variável `FILE_TOOLS_BASE_DIR` e a pasta
+  `workspace/` do `.gitignore`;
+- `exemplos/user.md`: cópia idêntica de `exemplos/erp/modulos/users.md`.
+
+---
+
+## Rodada 6 — Implementadores no sandbox Docker
+
+Data: 14/11/2026. Ainda não executada com o Gemini.
+
+### O que muda
+
+Os Implementadores (backend e frontend) agora são *deep agents* (`deepagents`)
+que trabalham dentro de um container (`tools/docker_sandbox.py`, imagem
+`dockersandbox` com JDK 21, Maven, Node e curl). A pasta do código é montada em
+`/workspace`. O agente grava cada arquivo do lote, compila
+(`mvn compile`, `npx tsc --noEmit`), roda os testes do lote e, quando a aplicação
+já sobe, testa os endpoints com `curl`. Com `SANDBOX=0` tudo volta a ser como
+antes.
+
+### Rede: um ambiente por execução
+
+`AmbienteDocker` cria uma rede Docker (`mas-<id>`) com:
+
+| Container | Hostname na rede | Origem |
+|---|---|---|
+| Banco do `tech_stack` (ex.: `postgres:16-alpine`) | `db` | `database` do PROJECT CONTEXT |
+| Cache (ex.: `redis:7-alpine`) | `redis` | `cache` do PROJECT CONTEXT |
+| Sandbox | `app` | `SANDBOX_IMAGEM` |
+
+O sandbox já recebe as variáveis de conexão (`SPRING_DATASOURCE_URL`,
+`SPRING_DATA_REDIS_HOST`, `DB_HOST`...), e o agente recebe a descrição do
+ambiente em cada lote. Um serviço que não sobe não impede a execução: só deixa
+de ser anunciado ao agente.
+
+Os dois Implementadores usam **o mesmo** sandbox, e não um container cada um.
+Eles rodam em sequência, e a imagem tem as duas toolchains. Assim o
+Implementador do frontend pode subir o backend e testar as telas contra a API em
+`localhost`, que é o alvo usual do proxy do Vite gerado pela base. No modo
+projeto há um ambiente só para todos os módulos: o código, o banco (com as
+migrations já aplicadas) e o cache do Maven e do npm são compartilhados entre
+eles. Tudo é destruído no fim, mesmo quando há falha.
+
+### O que continua igual
+
+O motivo de usar saída estruturada (rodada 2) era **validar antes de aceitar**,
+e isso foi mantido. Depois de cada tentativa, `ColetaSandbox`
+(`implementacao.py`):
+- colhe do disco os arquivos do lote e aplica `reparar_caminhos`;
+- desfaz as mudanças fora do lote (restaura arquivos alterados e apaga os
+  criados, exceto subprodutos de build como `package-lock.json`). Isso vale
+  também para o outro lado do projeto;
+- passa o resultado pela mesma `validar_arquivos` e pela mesma nova tentativa;
+- quando o lote é reprovado de vez, o disco volta ao estado de antes do lote.
+
+Testes: `tests/test_sandbox.py` (agente falso que grava no disco, mais um teste
+de integração com Docker real, pulado quando não há Docker).
+
+### Limites
+
+- `LIMITE_PASSOS_SANDBOX` (padrão 250) é o número de passos do grafo por
+  tentativa nos Implementadores. Os outros agentes seguem com
+  `LIMITE_PASSOS_AGENTE`. Ao estourar o limite, o que já foi gravado é colhido
+  e validado do mesmo jeito.
+- `execute` tem timeout também do lado Python. Um servidor iniciado em segundo
+  plano sem redirecionar a saída não trava mais o pipeline.
 
 ---
 

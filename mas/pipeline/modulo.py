@@ -6,8 +6,8 @@ Todos os agentes recebem o PROJECT CONTEXT (saída do Arquiteto-chefe). Sem
 contexto explícito, usa o arquivo de CONTEXTO_PADRAO (config.py).
 
 Cada etapa:
-  1. invoca o agente (saída estruturada Pydantic);
-  2. valida em código (validation.py);
+  1. invoca o agente (saída estruturada Pydantic) — execucao.py;
+  2. valida em código (validacao.py);
   3. se falhar, re-executa com os erros anexados (até MAX_TENTATIVAS);
   4. grava o artefato em saida/<modulo>/ antes de seguir.
 
@@ -15,21 +15,24 @@ As etapas de implementação estão em implementacao.py. O código gerado vai pa
 <codigo_dir>/backend e <codigo_dir>/frontend.
 """
 import json
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Optional, Set
 
 from langsmith import get_current_run_tree, traceable
 
-import implementacao
-import layout
-import validation
-from config import CONTEXTO_PADRAO, MAX_TENTATIVAS, SAIDA_DIR
-from execucao import PipelineError, executar_agente
-from layout import slugify
-from render import renderizar_relatorio
-from schemas import (FinalSpecification, ImplementationPlan, ModuleAnalysis,
-                     ModuleArchitecture, ModuleDataModel, ProjectContext)
-from system_prompts import templates
+from mas import validacao
+from mas.agentes import mensagens
+from mas.agentes.fabrica import (ambiente_sandbox, criar_agentes,
+                                 criar_implementadores)
+from mas.codigo import layout
+from mas.codigo.layout import slugify
+from mas.config import CONTEXTO_PADRAO, MAX_TENTATIVAS, SAIDA_DIR
+from mas.pipeline import implementacao
+from mas.pipeline.execucao import PipelineError, executar_agente
+from mas.relatorio import renderizar_relatorio
+from mas.schemas import (FinalSpecification, ImplementationPlan, ModuleAnalysis,
+                         ModuleArchitecture, ModuleDataModel, ProjectContext)
 
 ETAPAS = ("requisitos", "esclarecedor", "modelador_dados", "arquiteto_software",
           "planejador", "implementador_backend", "implementador_frontend")
@@ -52,11 +55,6 @@ CONSUMIDORES = {
     "plano": ETAPAS[5:],
 }
 
-# compatibilidade: estes nomes eram definidos aqui
-_executar = executar_agente
-__all__ = ["ETAPAS", "PipelineError", "processar_modulo", "carregar_contexto",
-           "slugify", "_executar"]
-
 
 def carregar_contexto(caminho: str = CONTEXTO_PADRAO) -> ProjectContext:
     return ProjectContext.model_validate_json(Path(caminho).read_text(encoding="utf-8"))
@@ -64,21 +62,6 @@ def carregar_contexto(caminho: str = CONTEXTO_PADRAO) -> ProjectContext:
 
 def _salvar(pasta: Path, nome: str, obj) -> None:
     (pasta / nome).write_text(obj.model_dump_json(indent=2), encoding="utf-8")
-
-
-def criar_agentes(contexto: ProjectContext) -> dict:
-    from agents import (arquiteto_software, esclarecedor, implementador_backend,
-                        implementador_frontend, modelador_de_dados, planejador,
-                        requisitos)
-    return {
-        "requisitos": requisitos.get_agente(contexto),
-        "esclarecedor": esclarecedor.get_agente(contexto),
-        "modelador_dados": modelador_de_dados.get_agente(contexto),
-        "arquiteto_software": arquiteto_software.get_agente(contexto),
-        "planejador": planejador.get_agente(contexto),
-        "implementador_backend": implementador_backend.get_agente(contexto),
-        "implementador_frontend": implementador_frontend.get_agente(contexto),
-    }
 
 
 def lado_final(ate: str) -> Optional[str]:
@@ -124,14 +107,16 @@ def processar_modulo(
     if contexto is None:
         contexto = carregar_contexto()
     if outros_modulos is None:
-        outros_modulos = templates.resumo_outros_modulos(contexto, nome)
-    conv = validation.convencoes(contexto)
+        outros_modulos = mensagens.resumo_outros_modulos(contexto, nome)
+    conv = validacao.convencoes(contexto)
 
     rt = get_current_run_tree()
     if rt:
         rt.add_metadata({"modulo": nome, "ate": ate, "de": de})
         rt.add_tags([f"modulo:{slugify(nome)}"])
 
+    # Sandbox só quando o pipeline cria os agentes (injetados = testes ou projeto)
+    usar_sandbox = agentes is None and lado_final(ate) is not None
     if agentes is None:
         agentes = criar_agentes(contexto)
 
@@ -182,38 +167,43 @@ def processar_modulo(
     # 1) Requisitos -------------------------------------------------------
     if roda("requisitos"):
         etapa_estruturada(
-            "requisitos", templates.msg_requisitos(nome, descricao, outros_modulos),
-            validation.validar_analise)
+            "requisitos", mensagens.msg_requisitos(nome, descricao, outros_modulos),
+            validacao.validar_analise)
 
     # 2) Esclarecedor -----------------------------------------------------
     if roda("esclarecedor"):
         analise = artefatos["analise"]
         etapa_estruturada(
             "esclarecedor",
-            templates.msg_esclarecedor(nome, descricao, analise, outros_modulos),
-            lambda e: validation.validar_especificacao(e, analise))
+            mensagens.msg_esclarecedor(nome, descricao, analise, outros_modulos),
+            lambda e: validacao.validar_especificacao(e, analise))
 
     # 3) Modelador de dados ---------------------------------------------
     if roda("modelador_dados"):
         spec = artefatos["especificacao"]
         etapa_estruturada(
-            "modelador_dados", templates.msg_modelador_dados(nome, spec, outros_modulos),
-            lambda m: validation.validar_modelo_dados(m, spec, conv))
+            "modelador_dados", mensagens.msg_modelador_dados(nome, spec, outros_modulos),
+            lambda m: validacao.validar_modelo_dados(m, spec, conv))
 
     # 4) Arquiteto de software ------------------------------------------
     if roda("arquiteto_software"):
         spec, modelo = artefatos["especificacao"], artefatos["modelo_dados"]
         etapa_estruturada(
             "arquiteto_software",
-            templates.msg_arquiteto_software(nome, spec, modelo, outros_modulos),
-            lambda a: validation.validar_arquitetura(a, spec, modelo, conv))
+            mensagens.msg_arquiteto_software(nome, spec, modelo, outros_modulos),
+            lambda a: validacao.validar_arquitetura(a, spec, modelo, conv))
 
+    pilha = ExitStack()
     try:
+        if usar_sandbox:
+            amb = pilha.enter_context(ambiente_sandbox(codigo, contexto))
+            agentes = {**agentes, **criar_implementadores(contexto, amb)}
         return _etapas_de_implementacao(
             nome, contexto, artefatos, agentes, pasta, codigo, metricas, ate, roda,
             falhar, plano_base, numero_migracao, outros_modulos, endpoints_externos,
             max_tentativas)
     finally:
+        pilha.close()
         # grava métricas mesmo se uma etapa de implementação falhar
         (pasta / "metricas.json").write_text(json.dumps(metricas, indent=2))
 

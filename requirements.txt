@@ -1,7 +1,8 @@
 langchain>=1.0
 langchain-google-genai
 langgraph            # será usado na fase de orquestração
+deepagents>=0.7       # Implementadores no sandbox Docker (mas/agentes/sandbox.py)
 pydantic>=2
-langsmith            # rastreamento (@traceable em pipeline.py)
+langsmith            # rastreamento (@traceable em mas/pipeline/)
 python-dotenv
 pytest

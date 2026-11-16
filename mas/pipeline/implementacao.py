@@ -5,132 +5,38 @@
 - Cada Implementador gera o plano em LOTES (IMPL_LOTE arquivos por chamada),
   em ordem topológica de depends_on; cada lote recebe o conteúdo já gerado dos
   arquivos de que depende.
-- Cada lote é validado em código (validation.validar_arquivos) e só então
-  gravado em disco, em <codigo>/backend e <codigo>/frontend.
-- A migration do módulo é gerada sem LLM (ddl.py).
+- Cada lote é validado em código (validacao.validar_arquivos) e só então
+  gravado em disco, em <codigo>/backend e <codigo>/frontend
+  (codigo/arquivos.py, que também repara caminhos trocados).
+- A migration do módulo é gerada sem LLM (codigo/ddl.py).
+- No modo sandbox (config.SANDBOX), o Implementador escreve o lote direto no
+  workspace do container e compila/testa lá; o pipeline colhe o lote do disco
+  (codigo/coleta.py), repara caminhos, descarta mudanças fora do lote e valida.
 """
 import json
-import re
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Set
 
-import layout
-import validation
-from assinaturas import assinaturas
-from config import IMPL_LIMITE_CONTEXTO, IMPL_LOTE, MAX_TENTATIVAS
-from ddl import gerar_ddl, usa_sql
-from execucao import PipelineError, executar_agente
-from schemas import (FinalSpecification, GeneratedFiles, ImplementationPlan,
-                     ModuleArchitecture, ModuleDataModel, PlannedFile,
-                     ProjectContext)
-from system_prompts import templates
+from mas import validacao
+from mas.agentes import mensagens
+from mas.codigo import layout
+from mas.codigo.arquivos import (caminho_seguro, caminhos_em_disco, gravar,
+                                 reparar_caminhos)
+from mas.codigo.assinaturas import assinaturas
+from mas.codigo.coleta import ColetaSandbox
+from mas.codigo.ddl import gerar_ddl, usa_sql
+from mas.config import (IMPL_LIMITE_CONTEXTO, IMPL_LOTE, LIMITE_PASSOS_AGENTE,
+                        LIMITE_PASSOS_SANDBOX, MAX_TENTATIVAS)
+from mas.pipeline.execucao import PipelineError, executar_agente
+from mas.schemas import (FinalSpecification, ImplementationPlan, ModuleArchitecture,
+                         ModuleDataModel, PlannedFile, ProjectContext)
 
 LADOS = ("backend", "frontend")
-_IGNORAR = {"node_modules", "target", "build", "dist", ".git", ".gradle", ".idea"}
-
-
-# ------------------------------------------------------------- disco
-def caminhos_em_disco(raiz: Path) -> Set[str]:
-    if not raiz.exists():
-        return set()
-    return {p.relative_to(raiz).as_posix() for p in raiz.rglob("*")
-            if p.is_file() and not _IGNORAR & set(p.relative_to(raiz).parts)}
-
-
-def _destino(raiz: Path, caminho: str) -> Path:
-    motivo = layout.caminho_invalido(caminho)
-    destino = (raiz / caminho).resolve()
-    if motivo or not destino.is_relative_to(raiz.resolve()):
-        raise PipelineError(f"Caminho recusado ao gravar: '{caminho}' ({motivo or 'fora da raiz'}).")
-    return destino
-
-
-def gravar(raiz: Path, gerados: GeneratedFiles) -> List[str]:
-    gravados = []
-    for f in gerados.files:
-        destino = _destino(raiz, f.path)
-        destino.parent.mkdir(parents=True, exist_ok=True)
-        destino.write_text(layout.limpar_conteudo(f.content), encoding="utf-8")
-        gravados.append(f.path)
-    return gravados
 
 
 def _salvar_json(caminho: Path, dados) -> None:
     caminho.parent.mkdir(parents=True, exist_ok=True)
     caminho.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding="utf-8")
-
-
-# ------------------------------------------------------------- reparo
-_TIPO_JVM = re.compile(
-    r"^(?:public\s+|internal\s+)?(?:(?:final|abstract|sealed|open|data|static)\s+)*"
-    r"(?:class|interface|enum|record|object|@interface)\s+([A-Za-z_]\w*)", re.M)
-_PACOTE_JVM = re.compile(r"^\s*package\s+([\w.]+)\s*;?\s*$", re.M)
-
-
-def _tipo_declarado(conteudo: str) -> Optional[Tuple[str, str]]:
-    """(pacote, primeiro tipo de topo) de um arquivo Java/Kotlin."""
-    pacote = _PACOTE_JVM.search(conteudo)
-    tipo = _TIPO_JVM.search(conteudo)
-    return (pacote.group(1), tipo.group(1)) if pacote and tipo else None
-
-
-def _exporta_tudo(conteudo: str, nomes: List[str]) -> bool:
-    """O conteúdo declara num `export` todos os nomes (TS/JS)."""
-    return bool(nomes) and all(
-        re.search(rf"^\s*export\b[^\n]*\b{re.escape(n)}\b", conteudo, re.M) for n in nomes)
-
-
-def reparar_caminhos(gerados: GeneratedFiles, pedidos: List[PlannedFile]) -> None:
-    """Corrige em código um erro recorrente do modelo: escrever o arquivo X com o
-    `path` de outro arquivo do lote (um arquivo, ou vários em cadeia).
-
-    - Java/Kotlin: o caminho é função do pacote e do tipo declarados, então todo
-      arquivo que declara P.X vai para o caminho pedido de P.X. Não mexe quando
-      dois arquivos declaram o mesmo tipo.
-    - Demais (TS/JS...): o arquivo duplicado ou não pedido é reatribuído quando
-      exporta todos os `exports` planejados de exatamente um arquivo que falta, e
-      não os do seu próprio caminho.
-    """
-    por_caminho = {f.path: f for f in pedidos}
-    por_fqcn = {layout.fqcn(p): p for p in por_caminho if layout.fqcn(p)}
-
-    # Java/Kotlin: reatribuição global pelo tipo declarado
-    declarados = {}
-    for i, f in enumerate(gerados.files):
-        if f.path.endswith((".java", ".kt")):
-            d = _tipo_declarado(layout.limpar_conteudo(f.content))
-            if d:
-                declarados[i] = f"{d[0]}.{d[1]}"
-    repetidos = {fq for fq in declarados.values() if list(declarados.values()).count(fq) > 1}
-    for i, fq in declarados.items():
-        f = gerados.files[i]
-        novo = por_fqcn.get(fq)
-        if novo and novo != f.path and fq not in repetidos:
-            gerados.notes.append(f"Caminho corrigido automaticamente: {f.path} -> {novo}")
-            print(f"  reparo: {f.path} -> {novo}")
-            f.path = novo
-
-    # Demais: pelos exports planejados
-    entregues = [f.path for f in gerados.files]
-    faltando = [p for p in por_caminho if p not in entregues]
-    for f in gerados.files:
-        if not faltando:
-            return
-        if f.path.endswith((".java", ".kt")):
-            continue
-        if entregues.count(f.path) > 1 or f.path not in por_caminho:
-            conteudo = layout.limpar_conteudo(f.content)
-            proprio = por_caminho.get(f.path)
-            if proprio and _exporta_tudo(conteudo, proprio.exports):
-                continue
-            candidatos = [p for p in faltando if _exporta_tudo(conteudo, por_caminho[p].exports)]
-            if len(candidatos) == 1:
-                novo = candidatos[0]
-                faltando.remove(novo)
-                entregues[entregues.index(f.path)] = novo
-                gerados.notes.append(f"Caminho corrigido automaticamente: {f.path} -> {novo}")
-                print(f"  reparo: {f.path} -> {novo}")
-                f.path = novo
 
 
 # ------------------------------------------------------------- lotes
@@ -233,7 +139,7 @@ def executar_lotes(
     arquivos: List[PlannedFile],
     raiz: Path,
     montar_mensagem: Callable[[List[PlannedFile], str, int, int], str],
-    conhecidos: Callable[[], validation.Conhecidos],
+    conhecidos: Callable[[], validacao.Conhecidos],
     pasta: Path,
     metricas: dict,
     max_tentativas: int,
@@ -244,7 +150,11 @@ def executar_lotes(
     Retomada: cada lote aprovado é registrado em <etapa>.progresso.json. Numa
     nova execução, arquivos já registrados (e ainda presentes em disco) não são
     gerados de novo. Ao terminar a etapa, o arquivo de progresso é apagado.
+
+    Agente com `sandbox` (agentes/fabrica.py, AgenteSandbox): o lote é colhido
+    do disco por ColetaSandbox em vez da saída estruturada.
     """
+    sandbox = getattr(agente, "sandbox", None)
     progresso = arquivo_progresso(pasta, etapa)
     manifesto: List[dict] = []
     if progresso.exists():
@@ -260,11 +170,20 @@ def executar_lotes(
         print(f"  [{etapa}] lote {i}/{len(lotes)}: {len(lote)} arquivo(s)")
         msg = montar_mensagem(lote, conteudo_dependencias(raiz, lote), i, len(lotes))
         k = conhecidos()
+        coleta = None
+        if sandbox is not None:
+            coleta = ColetaSandbox(sandbox.host_dir, raiz, lote)
+            msg += mensagens.msg_sandbox(lote, sandbox.caminho_no_container(raiz),
+                                         getattr(agente, "ambiente", ""))
         gerados, erros = executar_agente(
-            etapa, agente, msg, lambda g: validation.validar_arquivos(g, lote, k),
+            etapa, agente, msg, lambda g: validacao.validar_arquivos(g, lote, k),
             metricas, max_tentativas, modulo=modulo,
-            normalizar=lambda g: reparar_caminhos(g, lote))
+            normalizar=None if coleta else (lambda g: reparar_caminhos(g, lote)),
+            extrair=coleta,
+            limite_passos=LIMITE_PASSOS_SANDBOX if coleta else LIMITE_PASSOS_AGENTE)
         if erros:
+            if coleta:
+                coleta.desfazer()
             invalido = pasta / f"{etapa}.lote{i}.invalido.json"
             invalido.write_text(gerados.model_dump_json(indent=2), encoding="utf-8")
             raise PipelineError(
@@ -285,14 +204,14 @@ def executar_lotes(
 
 # ------------------------------------------------------------- conhecidos
 def _conhecidos(raiz_lado: Path, planos: Iterable[Optional[ImplementationPlan]],
-                lado: str, ctx: ProjectContext, **extra) -> validation.Conhecidos:
+                lado: str, ctx: ProjectContext, **extra) -> validacao.Conhecidos:
     caminhos = caminhos_em_disco(raiz_lado)
     for p in planos:
         if p:
             caminhos |= {f.path for f in getattr(p, f"{lado}_files")}
-    return validation.Conhecidos(
+    return validacao.Conhecidos(
         caminhos=caminhos,
-        pacote_base=validation.convencoes(ctx).pacote_base,
+        pacote_base=validacao.convencoes(ctx).pacote_base,
         **extra)
 
 
@@ -318,7 +237,7 @@ def garantir_base(
     """
     pasta.mkdir(parents=True, exist_ok=True)
     metricas = {} if metricas is None else metricas
-    conv = validation.convencoes(contexto)
+    conv = validacao.convencoes(contexto)
     rotas = layout.rotas_dos_modulos(modulos)
     front = layout.tem_frontend(contexto)
 
@@ -330,8 +249,8 @@ def garantir_base(
         proibidos = layout.prefixos_proibidos_base(contexto, conv.pacote_base, modulos)
         plano, erros = executar_agente(
             "planejador_base", agentes["planejador"],
-            templates.msg_planejador_base(modulos, rotas, proibidos, front),
-            lambda p: validation.validar_plano_base(p, contexto, modulos),
+            mensagens.msg_planejador_base(modulos, rotas, proibidos, front),
+            lambda p: validacao.validar_plano_base(p, contexto, modulos),
             metricas, max_tentativas, modulo="base")
         if erros:
             (pasta / "planejador_base.invalido.json").write_text(
@@ -358,7 +277,7 @@ def _implementar_base(contexto, modulos, pasta, codigo_dir, agentes, ate_lado,
                       arquiteturas: Dict[str, ModuleArchitecture]) -> None:
     lados = LADOS[: LADOS.index(ate_lado) + 1]
     endpoints = [e for a in arquiteturas.values() for e in a.endpoints]
-    conhecidos_api = ({validation.normalizar_rota(e.path) for e in endpoints}
+    conhecidos_api = ({validacao.normalizar_rota(e.path) for e in endpoints}
                       if endpoints else None)
     for lado in lados:
         manifesto_arq = pasta / f"{6 + LADOS.index(lado)}_{lado}.json"
@@ -369,7 +288,7 @@ def _implementar_base(contexto, modulos, pasta, codigo_dir, agentes, ate_lado,
         print(f"[base] Implementador {lado}")
         manifesto = executar_lotes(
             f"implementador_{lado}_base", agentes[f"implementador_{lado}"], arquivos, raiz,
-            lambda lote, deps, i, n, lado=lado: templates.msg_implementador_base(
+            lambda lote, deps, i, n, lado=lado: mensagens.msg_implementador_base(
                 lado, modulos, rotas, plano, deps, lote, i, n, endpoints),
             lambda raiz=raiz, lado=lado: _conhecidos(
                 raiz, [plano], lado, contexto, rotas_modulos=set(rotas),
@@ -387,12 +306,12 @@ def planejar_modulo(
 ):
     lay = layout.layout_modulo(contexto, nome, arq.java_package)
     ddl = gerar_ddl(modelo) if usa_sql(contexto) else ""
-    msg = templates.msg_planejador(
+    msg = mensagens.msg_planejador(
         nome, spec, modelo, arq, lay, layout.tem_frontend(contexto),
         layout.migracao_modulo(nome, numero_migracao), ddl, plano_base, outros_modulos)
     return executar_agente(
         "planejador", agente, msg,
-        lambda p: validation.validar_plano(p, nome, spec, modelo, arq, contexto, plano_base),
+        lambda p: validacao.validar_plano(p, nome, spec, modelo, arq, contexto, plano_base),
         metricas, max_tentativas, modulo=nome)
 
 
@@ -409,7 +328,7 @@ def implementar_backend(
     if usa_sql(contexto):
         ddl = gerar_ddl(modelo)
         migracao = layout.migracao_modulo(nome, numero_migracao)
-        destino = _destino(raiz, migracao)
+        destino = caminho_seguro(raiz, migracao)
         destino.parent.mkdir(parents=True, exist_ok=True)
         destino.write_text(ddl, encoding="utf-8")
         manifesto.append({"path": migracao, "lote": 0, "gerado_por": "ddl.py"})
@@ -418,7 +337,7 @@ def implementar_backend(
     tabelas = {e.table for e in modelo.entities}
     manifesto += executar_lotes(
         "implementador_backend", agente, plano.backend_files, raiz,
-        lambda lote, deps, i, n: templates.msg_implementador_backend(
+        lambda lote, deps, i, n: mensagens.msg_implementador_backend(
             nome, spec, arq, plano, plano_base, ddl, externas, deps, lote, i, n,
             api_base),
         lambda: _conhecidos(raiz, [plano, plano_base], "backend", contexto,
@@ -434,12 +353,12 @@ def implementar_frontend(
     codigo_dir: Path, pasta: Path, agente, metricas: dict, max_tentativas: int,
 ) -> List[dict]:
     raiz = codigo_dir / "frontend"
-    endpoints = {validation.normalizar_rota(e.path) for e in arq.endpoints}
-    endpoints |= {validation.normalizar_rota(e) for e in endpoints_externos}
+    endpoints = {validacao.normalizar_rota(e.path) for e in arq.endpoints}
+    endpoints |= {validacao.normalizar_rota(e) for e in endpoints_externos}
     api_base = api_da_base(raiz, plano_base, "frontend")
     return executar_lotes(
         "implementador_frontend", agente, plano.frontend_files, raiz,
-        lambda lote, deps, i, n: templates.msg_implementador_frontend(
+        lambda lote, deps, i, n: mensagens.msg_implementador_frontend(
             nome, spec, arq, plano, plano_base, deps, lote, i, n, api_base),
         lambda: _conhecidos(raiz, [plano, plano_base], "frontend", contexto,
                             endpoints=endpoints),

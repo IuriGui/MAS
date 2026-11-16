@@ -5,20 +5,20 @@ from pathlib import Path
 
 import pytest
 
-import implementacao
-import layout
-import validation
-from ddl import gerar_ddl
-from pipeline import PipelineError, carregar_contexto, processar_modulo
-from projeto import processar_projeto
-from schemas import (Column, Entity, GeneratedFile, GeneratedFiles, Index,
-                     ModuleDataModel, PublicService, Screen)
-from tests.fakes import (BASE_JAVA, PKG, AgenteFuncao, arq, conteudo,
-                         implementador_falso, planejador_falso, plano,
-                         plano_base)
-from tests.test_pipeline import (agentes, arquitetura, col,
-                                 modelo, spec)
-from tests.test_projeto import SISTEMA, contexto
+from mas import validacao
+from mas.codigo import arquivos, layout
+from mas.codigo.assinaturas import assinaturas
+from mas.codigo.ddl import gerar_ddl
+from mas.pipeline import implementacao
+from mas.pipeline.execucao import PipelineError
+from mas.pipeline.modulo import carregar_contexto, processar_modulo
+from mas.pipeline.projeto import processar_projeto
+from mas.schemas import (Column, Entity, GeneratedFile, GeneratedFiles,
+                         ImplementationPlan, Index, ModuleDataModel,
+                         PublicService, Screen)
+from tests.fakes import (AgenteFuncao, BASE_JAVA, PKG, SISTEMA, agentes, arq,
+                         arquitetura, col, conteudo, contexto, implementador_falso,
+                         modelo, planejador_falso, plano, plano_base, spec)
 
 DADOS = Path(__file__).parent / "dados"
 MAIN = f"src/main/java/{PKG}"
@@ -32,7 +32,7 @@ def ctx_sem_frontend():
 
 
 def validar_plano(p, c=None, base=None):
-    return validation.validar_plano(p, "Usuários", spec(), modelo(), arquitetura(),
+    return validacao.validar_plano(p, "Usuários", spec(), modelo(), arquitetura(),
                                     c or carregar_contexto(),
                                     plano_base() if base is None else base)
 
@@ -97,7 +97,7 @@ def test_modelo_restricao_que_nao_e_sql():
     m = modelo()
     m.entities[0].constraints.append("email deve ser único por tenant")
     m.entities[0].columns[-1].constraints.append("must be lowercase")
-    erros = validation.validar_modelo_dados(m, spec())
+    erros = validacao.validar_modelo_dados(m, spec())
     assert any("não é SQL" in e and "users" in e for e in erros)
     assert any("users.email" in e for e in erros)
 
@@ -191,7 +191,7 @@ def test_plano_servico_publico_e_evento_exportados():
     a.public_services.append(PublicService(
         interface="UserQueryService", method="get", parameters="UUID id",
         return_type="UserDto", purpose="p", consumer_module="Sales"))
-    erros = validation.validar_plano(plano(), "Usuários", spec(), modelo(), a,
+    erros = validacao.validar_plano(plano(), "Usuários", spec(), modelo(), a,
                                      carregar_contexto(), plano_base())
     assert any("UserQueryService" in e for e in erros)
 
@@ -208,7 +208,7 @@ MODULOS = ["Users", "Catalog"]
 
 
 def test_plano_base_ok():
-    assert validation.validar_plano_base(plano_base(), carregar_contexto(), MODULOS) == []
+    assert validacao.validar_plano_base(plano_base(), carregar_contexto(), MODULOS) == []
 
 
 def test_plano_base_invade_modulo_e_sql():
@@ -217,7 +217,7 @@ def test_plano_base_invade_modulo_e_sql():
     p.frontend_files.append(arq("src/modules/users/routes.tsx", "routes"))
     p.backend_files.append(arq("src/main/resources/db/migration/V1__x.sql", "config"))
     p.conventions = []
-    erros = validation.validar_plano_base(p, carregar_contexto(), MODULOS)
+    erros = validacao.validar_plano_base(p, carregar_contexto(), MODULOS)
     assert any("users/Coisa.java" in e and "pasta de módulo" in e for e in erros)
     assert any("src/modules/users/routes.tsx" in e for e in erros)
     assert any("V0__" in e for e in erros)
@@ -256,7 +256,7 @@ def conhecidos(**kw):
              endpoints={"/api/v1/users", "/api/v1/users/{}"},
              rotas_modulos={"src/modules/usuarios/routes"})
     k.update(kw)
-    return validation.Conhecidos(**k)
+    return validacao.Conhecidos(**k)
 
 
 def gerar(*arquivos):
@@ -267,14 +267,14 @@ def gerar(*arquivos):
 def test_arquivos_ok():
     p = plano()
     todos = p.backend_files + p.frontend_files
-    assert validation.validar_arquivos(gerar(*todos), todos, conhecidos()) == []
+    assert validacao.validar_arquivos(gerar(*todos), todos, conhecidos()) == []
 
 
 def test_arquivos_faltando_e_extra():
     p = plano()
     pedidos = p.backend_files[:2]
     g = gerar(p.backend_files[0], p.backend_files[3])
-    erros = validation.validar_arquivos(g, pedidos, conhecidos())
+    erros = validacao.validar_arquivos(g, pedidos, conhecidos())
     assert any("não entregues" in e and "Role.java" in e for e in erros)
     assert any("não foram pedidos" in e for e in erros)
 
@@ -287,7 +287,7 @@ def test_arquivos_java_pacote_classe_import_e_tabela():
               "import org.springframework.stereotype.Service;\n"
               '@Table(name = "clientes")\npublic class Usuario {}\n')
     g = GeneratedFiles(files=[GeneratedFile(path=f.path, content=codigo)], notes=[])
-    erros = validation.validar_arquivos(g, [f], conhecidos())
+    erros = validacao.validar_arquivos(g, [f], conhecidos())
     assert any("package com.distributor.erp.users.domain" in e for e in erros)
     assert any("'User'" in e for e in erros)
     assert any("Inexistente" in e for e in erros)
@@ -303,14 +303,14 @@ def test_arquivos_import_estatico_aninhado_e_curinga():
               "import com.distributor.erp.users.repository.*;\n"
               "public class User {}\n")
     g = GeneratedFiles(files=[GeneratedFile(path=f.path, content=codigo)], notes=[])
-    assert validation.validar_arquivos(g, [f], conhecidos()) == []
+    assert validacao.validar_arquivos(g, [f], conhecidos()) == []
 
 
 def test_arquivos_placeholder():
     f = plano().backend_files[0]
     g = gerar(f)
     g.files[0].content += "// TODO implementar\n"
-    assert any("incompleto" in e for e in validation.validar_arquivos(g, [f], conhecidos()))
+    assert any("incompleto" in e for e in validacao.validar_arquivos(g, [f], conhecidos()))
 
 
 def test_arquivos_front_import_e_endpoint():
@@ -324,7 +324,7 @@ def test_arquivos_front_import_e_endpoint():
               "const base = '/api/v1';\n"
               "export const UsersPage = () => null;\n")
     g = GeneratedFiles(files=[GeneratedFile(path=f.path, content=codigo)], notes=[])
-    erros = validation.validar_arquivos(g, [f], conhecidos())
+    erros = validacao.validar_arquivos(g, [f], conhecidos())
     assert len(erros) == 2, erros
     assert any("naoExiste" in e for e in erros)
     assert any("/api/v1/clientes" in e for e in erros)
@@ -334,9 +334,9 @@ def test_arquivos_front_endpoint_de_outro_modulo():
     f = arq(f"{FRONT}api/x.ts", "api_client")
     g = GeneratedFiles(files=[GeneratedFile(
         path=f.path, content="export const u = '/api/v1/customers/:id';\n")], notes=[])
-    assert validation.validar_arquivos(g, [f], conhecidos()) != []
+    assert validacao.validar_arquivos(g, [f], conhecidos()) != []
     k = conhecidos(endpoints={"/api/v1/customers/{}"})
-    assert validation.validar_arquivos(g, [f], k) == []
+    assert validacao.validar_arquivos(g, [f], k) == []
 
 
 def test_arquivos_base_importa_rotas_de_modulo():
@@ -345,7 +345,7 @@ def test_arquivos_base_importa_rotas_de_modulo():
         path=f.path, content="import r from './modules/usuarios/routes';\n"
                              "import s from './modules/vendas/routes';\nexport const App = r;\n")],
         notes=[])
-    erros = validation.validar_arquivos(g, [f], conhecidos())
+    erros = validacao.validar_arquivos(g, [f], conhecidos())
     assert len(erros) == 1 and "vendas" in erros[0]
 
 
@@ -511,17 +511,16 @@ def test_base_reprovada(tmp_path):
 def test_reparo_saida_real_do_gemini():
     """Lote 6 da base na 1ª execução real: o Gemini escreveu OutboxPublisher com o
     path de OutboxProcessorService (duplicado) e deixou OutboxPublisher faltando."""
-    from schemas import ImplementationPlan
     p = ImplementationPlan.model_validate_json((DADOS / "plano_base_real.json").read_text())
     lote = implementacao.montar_lotes(p.backend_files)[5]
     g = GeneratedFiles.model_validate_json((DADOS / "lote_caminho_trocado.json").read_text())
-    k = validation.Conhecidos(caminhos={f.path for f in p.backend_files},
+    k = validacao.Conhecidos(caminhos={f.path for f in p.backend_files},
                               pacote_base="com.distributor.erp.")
-    antes = validation.validar_arquivos(g, lote, k)
+    antes = validacao.validar_arquivos(g, lote, k)
     assert any("não entregues" in e for e in antes)
 
-    implementacao.reparar_caminhos(g, lote)
-    assert validation.validar_arquivos(g, lote, k) == []
+    arquivos.reparar_caminhos(g, lote)
+    assert validacao.validar_arquivos(g, lote, k) == []
     assert any("OutboxPublisher.java" in n for n in g.notes)
 
 
@@ -536,17 +535,17 @@ def test_reparo_so_quando_inequivoco():
     # B escrito com o path de A: reparado
     g = GeneratedFiles(files=[GeneratedFile(path=a.path, content=_java(pkg, "A")),
                               GeneratedFile(path=a.path, content=_java(pkg, "B"))], notes=[])
-    implementacao.reparar_caminhos(g, [a, b])
+    arquivos.reparar_caminhos(g, [a, b])
     assert [f.path for f in g.files] == [a.path, b.path]
     # B em outro pacote: não reparado (fica para a validação reprovar)
     g = GeneratedFiles(files=[GeneratedFile(path=a.path, content=_java(pkg, "A")),
                               GeneratedFile(path=a.path, content=_java("x.y", "B"))], notes=[])
-    implementacao.reparar_caminhos(g, [a, b])
+    arquivos.reparar_caminhos(g, [a, b])
     assert [f.path for f in g.files] == [a.path, a.path] and g.notes == []
     # nada faltando: nada muda
     g = GeneratedFiles(files=[GeneratedFile(path=a.path, content=_java(pkg, "A")),
                               GeneratedFile(path=b.path, content=_java(pkg, "B"))], notes=[])
-    implementacao.reparar_caminhos(g, [a, b])
+    arquivos.reparar_caminhos(g, [a, b])
     assert g.notes == []
 
 
@@ -598,16 +597,16 @@ def test_todo_em_portugues_nao_e_placeholder():
     texto = ("export const UsersPage = () => 'Selecione todo o período';\n"
              "// valida todo o formulário\n")
     g = GeneratedFiles(files=[GeneratedFile(path=f.path, content=texto)], notes=[])
-    assert validation.validar_arquivos(g, [f], conhecidos()) == []
+    assert validacao.validar_arquivos(g, [f], conhecidos()) == []
     g.files[0].content += "// TODO\n"
-    assert validation.validar_arquivos(g, [f], conhecidos()) != []
+    assert validacao.validar_arquivos(g, [f], conhecidos()) != []
 
 
 def test_package_info_nao_exige_tipo():
     f = arq(f"{MAIN}/domain/package-info.java", "other")
     g = GeneratedFiles(files=[GeneratedFile(
         path=f.path, content="package com.distributor.erp.users.domain;\n")], notes=[])
-    assert validation.validar_arquivos(g, [f], conhecidos()) == []
+    assert validacao.validar_arquivos(g, [f], conhecidos()) == []
 
 
 # ================================================================ endpoints na base
@@ -615,8 +614,8 @@ def test_base_sem_arquiteturas_nao_checa_urls():
     f = arq("src/context/AuthContext.tsx", "store", ["AuthProvider"])
     g = GeneratedFiles(files=[GeneratedFile(
         path=f.path, content="export const AuthProvider = '/api/v1/auth/login';\n")], notes=[])
-    assert validation.validar_arquivos(g, [f], conhecidos(endpoints=None)) == []
-    assert validation.validar_arquivos(g, [f], conhecidos()) != []
+    assert validacao.validar_arquivos(g, [f], conhecidos(endpoints=None)) == []
+    assert validacao.validar_arquivos(g, [f], conhecidos()) != []
 
 
 def test_base_recebe_endpoints_do_modulo(tmp_path):
@@ -635,9 +634,9 @@ def test_reparo_frontend_pelos_exports():
         GeneratedFile(path=form.path, content="export default function UserFormPage() {}\n"),
         GeneratedFile(path=form.path, content="export const UserListPage = () => null;\n"),
     ], notes=[])
-    implementacao.reparar_caminhos(g, [lista, form])
+    arquivos.reparar_caminhos(g, [lista, form])
     assert [f.path for f in g.files] == [form.path, lista.path]
-    assert validation.validar_arquivos(g, [lista, form], conhecidos()) == []
+    assert validacao.validar_arquivos(g, [lista, form], conhecidos()) == []
 
 
 def test_reparo_frontend_ambiguo_nao_mexe():
@@ -647,12 +646,11 @@ def test_reparo_frontend_ambiguo_nao_mexe():
     g = GeneratedFiles(files=[GeneratedFile(path=c.path, content="export const Y = 1;\n"),
                               GeneratedFile(path=c.path, content="export const X = 1;\n")],
                        notes=[])
-    implementacao.reparar_caminhos(g, [a, b, c])
+    arquivos.reparar_caminhos(g, [a, b, c])
     assert [f.path for f in g.files] == [c.path, c.path] and g.notes == []
 
 
 # ================================================================ assinaturas no contexto
-from assinaturas import assinaturas  # noqa: E402
 
 JAVA_REPO = """package com.x.repo;
 
@@ -748,11 +746,11 @@ def test_reparo_deslocamento_em_cadeia():
         GeneratedFile(path=pedidos[1].path, content=_java(pkg, "RoleController")),
         GeneratedFile(path=pedidos[2].path, content=_java(pkg, "AuthController")),
     ], notes=[])
-    implementacao.reparar_caminhos(g, pedidos)
+    arquivos.reparar_caminhos(g, pedidos)
     assert sorted(f.path for f in g.files) == sorted(f.path for f in pedidos)
     for f in g.files:
         assert f"class {f.path.rsplit('/', 1)[1][:-5]} " in f.content
-    assert validation.validar_arquivos(g, pedidos, conhecidos()) == []
+    assert validacao.validar_arquivos(g, pedidos, conhecidos()) == []
 
 
 def test_reparo_tipo_repetido_nao_mexe():
@@ -761,5 +759,5 @@ def test_reparo_tipo_repetido_nao_mexe():
     b = arq(f"{MAIN}/service/B.java", "service", ["B"])
     g = GeneratedFiles(files=[GeneratedFile(path=a.path, content=_java(pkg, "B")),
                               GeneratedFile(path=b.path, content=_java(pkg, "B"))], notes=[])
-    implementacao.reparar_caminhos(g, [a, b])
+    arquivos.reparar_caminhos(g, [a, b])
     assert [f.path for f in g.files] == [a.path, b.path] and g.notes == []

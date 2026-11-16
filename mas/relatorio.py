@@ -1,8 +1,8 @@
 """Converte os artefatos estruturados em markdown legível para humanos."""
 from typing import List
 
-from schemas import (FinalSpecification, ImplementationPlan, ModuleAnalysis,
-                     ModuleArchitecture, ModuleDataModel, ProjectContext)
+from mas.schemas import (FinalSpecification, ImplementationPlan, ModuleAnalysis,
+                         ModuleArchitecture, ModuleDataModel, ProjectContext)
 
 
 def _lista(itens: List[str]) -> str:

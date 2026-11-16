@@ -6,7 +6,7 @@ não importa.
 """
 from typing import List, Optional
 
-from schemas import ModuleDataModel, ProjectContext
+from mas.schemas import ModuleDataModel, ProjectContext
 
 _BANCOS_SQL = ("postgres", "mysql", "mariadb", "sql", "oracle", "h2", "sqlite")
 

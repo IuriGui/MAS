@@ -12,13 +12,12 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-import config
-import implementacao
-from config import LIMITE_PASSOS_AGENTE
-from execucao import PipelineError, executar_agente
-from schemas import ModuleAnalysis
-from tests.fakes import arq
-from tests.test_pipeline import AgenteFalso, spec
+from mas import config
+from mas.config import LIMITE_PASSOS_AGENTE
+from mas.pipeline import implementacao
+from mas.pipeline.execucao import PipelineError, executar_agente
+from mas.schemas import ModuleAnalysis
+from tests.fakes import AgenteFalso, arq, spec
 
 VALIDA = {"module_name": "U", "scope_summary": "s", "problems": [],
           "functional_requirements": [], "non_functional_requirements": [],
@@ -118,13 +117,13 @@ def test_config_nao_aceita_zero(monkeypatch):
 
 
 def test_modelo_criado_com_retry_http_e_timeout_limitados(monkeypatch):
-    import agents._base as base
+    from mas.agentes import fabrica
     capturado = {}
 
     def falso_init(modelo, **kw):
         capturado.update(kw)
         return ModeloFalso()
-    monkeypatch.setattr(base, "init_chat_model", falso_init)
-    base.criar_agente_estruturado("x", ModuleAnalysis)
+    monkeypatch.setattr(fabrica, "init_chat_model", falso_init)
+    fabrica.criar_agente_estruturado("x", ModuleAnalysis)
     assert capturado["max_retries"] == config.MAX_RETRIES_API
     assert capturado["timeout"] == config.TIMEOUT_API > 0

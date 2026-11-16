@@ -7,10 +7,10 @@ prompt and were never replaced.
 import json
 from typing import Dict, List, Optional, Tuple
 
-from layout import PREFIXO_MIGRACAO_BASE, Layout
-from schemas import (FinalSpecification, ImplementationPlan, ModuleAnalysis,
-                     ModuleArchitecture, ModuleDataModel, PlannedFile,
-                     ProjectContext)
+from mas.codigo.layout import PREFIXO_MIGRACAO_BASE, Layout
+from mas.schemas import (FinalSpecification, ImplementationPlan, ModuleAnalysis,
+                         ModuleArchitecture, ModuleDataModel, PlannedFile,
+                         ProjectContext)
 
 NO_CONTEXT = "(no other module information provided)"
 
@@ -269,4 +269,14 @@ def msg_implementador_base(
         + f"\n\nBASE PLAN — {lado} files (JSON):\n{_arquivos(arquivos)}\n\n"
         f"CONTENT OF FILES THIS BATCH DEPENDS ON:\n{dependencias or NO_FILES}\n\n"
         + _lote(lote)
+    )
+
+
+def msg_sandbox(lote: List[PlannedFile], raiz_container: str, ambiente: str) -> str:
+    """Complemento da mensagem de um lote no modo sandbox."""
+    caminhos = "\n".join(f"- {raiz_container}/{f.path}" for f in lote)
+    return (
+        f"\n\nSANDBOX:\nSide root: {raiz_container}\n"
+        f"Write exactly these files (absolute paths):\n{caminhos}\n\n"
+        f"Services in the Docker network:\n{ambiente or '- (none)'}"
     )

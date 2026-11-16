@@ -14,7 +14,9 @@ venv/
 
 # saídas geradas pelo pipeline (artefatos e código gerado)
 saida/
-workspace/
 
 # backup antigo
 sistemas.zip
+
+# backups locais das execuções
+backup_*.tar.gz

@@ -8,10 +8,10 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
-import layout
-from schemas import (FinalSpecification, GeneratedFiles, ImplementationPlan,
-                     ModuleAnalysis, ModuleArchitecture, ModuleDataModel,
-                     PlannedFile, ProjectContext)
+from mas.codigo import layout
+from mas.schemas import (FinalSpecification, GeneratedFiles, ImplementationPlan,
+                         ModuleAnalysis, ModuleArchitecture, ModuleDataModel,
+                         PlannedFile, ProjectContext)
 
 _SNAKE = re.compile(r"^[a-z][a-z0-9]*(_[a-z0-9]+)*$")
 _ID_FR = re.compile(r"^FR\d+$")

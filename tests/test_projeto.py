@@ -2,39 +2,13 @@ import json
 
 import pytest
 
-import validation
-from pipeline import PipelineError, carregar_contexto
-from projeto import gerar_contexto, ler_modulos, processar_projeto
-from system_prompts import templates
-from tests.test_pipeline import (AgenteFalso, agentes, arquitetura, modelo,
-                                 spec)
-
-SISTEMA = """\
-SYSTEM DESCRIPTION
-Um ERP pequeno.
-
-MODULES
-1. Users: user accounts and roles.
-2. Catalog: products,
-   categories and prices.
-3. Sales: sales orders.
-
-CONSTRAINTS
-- Preferred stack: Spring Boot.
-"""
-
-
-def contexto(**mudancas):
-    """Contexto do exemplo reduzido a Users -> Catalog -> Sales."""
-    c = carregar_contexto().model_copy(deep=True)
-    mapa = {m.name: m for m in c.module_map}
-    c.module_map = [mapa["Users"], mapa["Catalog"], mapa["Sales"]]
-    mapa["Sales"].depends_on = ["Users", "Catalog"]
-    c.build_order = ["Users", "Catalog", "Sales"]
-    for k, v in mudancas.items():
-        setattr(c, k, v)
-    return c
-
+from mas import validacao
+from mas.agentes import mensagens
+from mas.pipeline.execucao import PipelineError
+from mas.pipeline.modulo import carregar_contexto
+from mas.pipeline.projeto import gerar_contexto, ler_modulos, processar_projeto
+from tests.fakes import (SISTEMA, AgenteFalso, agentes, arquitetura, contexto,
+                         modelo, spec)
 
 DECLARADOS = ["Users", "Catalog", "Sales"]
 
@@ -49,62 +23,62 @@ def test_ler_modulos():
 # --------------------------------------------------------- validação do contexto
 def test_contexto_exemplo_valido():
     c = carregar_contexto()
-    assert validation.validar_contexto(c, [m.name for m in c.module_map]) == []
+    assert validacao.validar_contexto(c, [m.name for m in c.module_map]) == []
 
 
 def test_contexto_ok():
-    assert validation.validar_contexto(contexto(), DECLARADOS) == []
+    assert validacao.validar_contexto(contexto(), DECLARADOS) == []
 
 
 def test_contexto_modulo_faltando():
-    erros = validation.validar_contexto(contexto(), DECLARADOS + ["Finance"])
+    erros = validacao.validar_contexto(contexto(), DECLARADOS + ["Finance"])
     assert any("Finance" in e for e in erros)
 
 
 def test_contexto_ciclo():
     c = contexto()
     c.module_map[0].depends_on = ["Sales"]  # Users -> Sales -> Users
-    erros = validation.validar_contexto(c, DECLARADOS)
+    erros = validacao.validar_contexto(c, DECLARADOS)
     assert any("circular" in e for e in erros)
 
 
 def test_contexto_build_order_fora_de_ordem():
-    erros = validation.validar_contexto(
+    erros = validacao.validar_contexto(
         contexto(build_order=["Sales", "Users", "Catalog"]), DECLARADOS)
     assert any("antes de sua dependência" in e for e in erros)
 
 
 def test_contexto_build_order_incompleto():
-    erros = validation.validar_contexto(contexto(build_order=["Users", "Catalog"]), DECLARADOS)
+    erros = validacao.validar_contexto(contexto(build_order=["Users", "Catalog"]), DECLARADOS)
     assert any("não inclui" in e for e in erros)
 
 
 def test_contexto_dependencia_inexistente():
     c = contexto()
     c.module_map[2].depends_on = ["Users", "Billing"]
-    assert any("Billing" in e for e in validation.validar_contexto(c, DECLARADOS))
+    assert any("Billing" in e for e in validacao.validar_contexto(c, DECLARADOS))
 
 
 # --------------------------------------------------------- convenções do contexto
 def test_convencoes_do_exemplo_iguais_ao_padrao():
-    assert validation.convencoes(carregar_contexto()) == validation.PADRAO
+    assert validacao.convencoes(carregar_contexto()) == validacao.PADRAO
 
 
 def test_convencoes_sem_multitenancy():
     c = contexto()
     c.cross_cutting_decisions.multi_tenancy.enabled = False
     c.naming_conventions.packages = "br.ufsm.loja.<module_name>"
-    conv = validation.convencoes(c)
+    conv = validacao.convencoes(c)
     assert "tenant_id" not in conv.colunas_base
     assert conv.pacote_base == "br.ufsm.loja."
-    assert validation.validar_arquitetura(
+    assert validacao.validar_arquitetura(
         arquitetura(pacote="br.ufsm.loja.users"), spec(), modelo(), conv) == []
-    assert validation.validar_arquitetura(arquitetura(), spec(), modelo(), conv) != []
+    assert validacao.validar_arquitetura(arquitetura(), spec(), modelo(), conv) != []
 
 
 # --------------------------------------------------------- resumo dos outros módulos
 def test_resumo_outros_modulos():
-    r = templates.resumo_outros_modulos(contexto(), "Users",
+    r = mensagens.resumo_outros_modulos(contexto(), "Users",
                                         {"Catalog": arquitetura()})
     assert "Catalog" in r and "Sales" in r
     assert "- Users" not in r

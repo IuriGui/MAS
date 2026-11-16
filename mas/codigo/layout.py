@@ -15,7 +15,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Tuple
 
-from schemas import ProjectContext
+from mas.schemas import ProjectContext
 
 MIGRACOES_DIR = "src/main/resources/db/migration"
 PREFIXO_MIGRACAO_BASE = f"{MIGRACOES_DIR}/V0__"

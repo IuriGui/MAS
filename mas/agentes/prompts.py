@@ -4,7 +4,7 @@ Os prompts dos agentes de módulo são só regras: o PROJECT CONTEXT (saída do
 Arquiteto-chefe) é anexado na frente por `com_contexto`, então trocar de
 projeto não exige editar este arquivo.
 """
-from schemas import ProjectContext
+from mas.schemas import ProjectContext
 
 
 def com_contexto(contexto: ProjectContext, regras: str) -> str:
@@ -379,3 +379,50 @@ Strict Rules:
 MANDATORY Format (Structured/JSON):
 Fields: files (array of {path, content}), notes.
 """
+
+
+# ------------------------------------------------------------ modo sandbox
+_FORMATO = "MANDATORY Format (Structured/JSON):"
+_RETORNO = ("- Return exactly the requested paths, each with the full file content. No\n"
+            "  markdown fences, no explanations inside the content.")
+_ESCRITA = ("- Write exactly the requested paths, each with the full file content, using\n"
+            "  the file tools. No markdown fences, no explanations inside the content.")
+
+MODO_SANDBOX = """\
+SANDBOX MODE (you work inside a Docker container with JDK, Maven, Node/npm, curl):
+- The project code is mounted at /workspace: backend at /workspace/backend and
+  frontend at /workspace/frontend. The files you write there ARE the deliverable.
+- Write each file of the batch with write_file at the absolute path given in the
+  message; fix it with edit_file. Read any existing file with read_file/grep
+  instead of guessing its API.
+- Do NOT create, modify or delete files outside the batch: those changes are
+  discarded automatically. If a file outside the batch is wrong, report it in
+  your final message.
+- VERIFY before finishing, with execute:
+  * compile/type-check the side you changed (e.g. `mvn -q compile` or
+    `mvn -q test-compile` in /workspace/backend; `npm install` once if
+    node_modules is missing, then `npx tsc --noEmit` in /workspace/frontend);
+  * run the tests of the batch when it has test files;
+  * errors caused only by files that are planned but not generated yet (later
+    batches or modules) are expected: ignore them; fix every error in the batch.
+- TEST THE FEATURES when the application can already start: run the server in
+  background with the output redirected (`nohup <cmd> > /tmp/backend.log 2>&1 &`;
+  a server in the foreground blocks the command), wait for it and exercise the
+  endpoints of the batch with curl (frontend: the dev server with
+  `--host 0.0.0.0`, and the API calls the screens make). Servers keep running
+  between batches: after changing backend code, restart it
+  (`fuser -k 8080/tcp`). The database and cache of the tech_stack run in the
+  same Docker network (hosts and variables in the message).
+- Be proportional: stop when the batch compiles and its features behave; if a
+  failure comes from outside the batch, stop and report it.
+
+Final answer: a short plain-text summary of what you verified (commands and
+results) and any problem found outside the batch. Do not repeat file contents.
+"""
+
+
+def regras_sandbox(regras: str) -> str:
+    """Regras de um Implementador adaptadas ao modo sandbox (sem saída estruturada)."""
+    if _FORMATO not in regras or _RETORNO not in regras:
+        raise ValueError("Prompt de Implementador fora do formato esperado")
+    return regras.split(_FORMATO)[0].replace(_RETORNO, _ESCRITA) + MODO_SANDBOX

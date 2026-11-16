@@ -8,19 +8,24 @@ de todos os módulos vai para saida/<projeto>/codigo/{backend,frontend}.
 """
 import json
 import re
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 from langsmith import traceable
 
-import implementacao
-import validation
-from config import MAX_TENTATIVAS, SAIDA_DIR, VALIDAR
-from pipeline import (ETAPAS, PipelineError, _executar, carregar_contexto,
-                      lado_final, processar_modulo, slugify)
-from render import render_contexto
-from schemas import ProjectContext
-from system_prompts import templates
+from mas import validacao
+from mas.agentes import mensagens
+from mas.agentes.fabrica import (ambiente_sandbox, criar_agentes,
+                                 criar_arquiteto_chefe)
+from mas.codigo.layout import slugify
+from mas.config import MAX_TENTATIVAS, SAIDA_DIR, VALIDAR
+from mas.pipeline import implementacao
+from mas.pipeline.execucao import PipelineError, executar_agente
+from mas.pipeline.modulo import (ETAPAS, carregar_contexto, lado_final,
+                                 processar_modulo)
+from mas.relatorio import render_contexto
+from mas.schemas import ModuleArchitecture, ProjectContext
 
 _CABECALHO_MODULOS = re.compile(r"^\s*#*\s*(MODULES|MÓDULOS|MODULOS)\s*:?\s*$", re.I)
 _ITEM = re.compile(r"^\s*(?:\d+[.)]|[-*])\s*([^:]+?)\s*:\s*(.*)$")
@@ -73,17 +78,16 @@ def gerar_contexto(
             "Nenhum módulo encontrado na descrição do sistema. Use uma seção "
             "'MODULES' com itens no formato '1. Nome: responsabilidade'.")
     if agente is None:
-        from agents import arquiteto_chefe
-        agente = arquiteto_chefe.get_agente()
+        agente = criar_arquiteto_chefe()
 
     pasta.mkdir(parents=True, exist_ok=True)
     metricas: dict = {}
     nomes = [n for n, _ in modulos]
     print(f"[0] Arquiteto-chefe — {len(modulos)} módulo(s) declarado(s)")
-    contexto, erros = _executar(
+    contexto, erros = executar_agente(
         "arquiteto_chefe", agente,
-        templates.msg_arquiteto_chefe(descricao_sistema, modulos),
-        lambda c: validation.validar_contexto(c, nomes),
+        mensagens.msg_arquiteto_chefe(descricao_sistema, modulos),
+        lambda c: validacao.validar_contexto(c, nomes),
         metricas, max_tentativas, modulo=nome_projeto)
     _salvar_json(pasta / "metricas_contexto.json", metricas)
     if erros:
@@ -131,7 +135,7 @@ def processar_projeto(
         contexto = gerar_contexto(nome_projeto, descricao_sistema, pasta,
                                   agente_chefe, max_tentativas)
     elif VALIDAR:
-        erros = validation.validar_contexto(
+        erros = validacao.validar_contexto(
             contexto, [n for n, _ in ler_modulos(descricao_sistema)])
         if erros:
             raise PipelineError("Contexto informado é inválido:\n- " + "\n- ".join(erros))
@@ -148,48 +152,53 @@ def processar_projeto(
     plano_base = None
     arquiteturas: Dict[str, object] = _arquiteturas_existentes(pasta, contexto)
     implementa = ETAPAS.index(ate) >= ETAPAS.index("planejador")
-    if implementa:
-        agentes_base = fabrica_agentes(contexto) if fabrica_agentes else None
-        if agentes_base is None:
-            from pipeline import criar_agentes
-            agentes_base = criar_agentes(contexto)
-        # Endpoints de execuções anteriores (se houver) ajudam a base (ex.: login)
-        plano_base = implementacao.garantir_base(
-            contexto, list(contexto.build_order), pasta / "base", codigo,
-            agentes_base, lado_final(ate), max_tentativas,
-            arquiteturas=arquiteturas or None)
-
     status: Dict[str, dict] = {}
-    for numero, nome in enumerate(contexto.build_order, 1):
-        if filtro and nome.strip().lower() not in filtro:
-            continue
-        descricao = _descricao_modulo(nome, modulos_dir, declarados, entradas)
-        print(f"\n=== Módulo {nome} ===")
-        externos = {e.path for n, a in arquiteturas.items() if n != nome
-                    for e in a.endpoints}
-        try:
-            res = processar_modulo(
-                nome, descricao,
-                outros_modulos=templates.resumo_outros_modulos(contexto, nome, arquiteturas),
-                ate=ate, de=de,
-                agentes=fabrica_agentes(contexto) if fabrica_agentes else None,
-                saida_dir=str(pasta), max_tentativas=max_tentativas,
-                contexto=contexto, plano_base=plano_base,
-                codigo_dir=str(codigo), numero_migracao=numero,
-                endpoints_externos=externos)
-        except PipelineError as e:
-            print(f"  FALHA em {nome}: {e}")
-            status[nome] = {"status": "falhou", "erro": str(e)}
-            continue
-        if "arquitetura" in res:
-            arquiteturas[nome] = res["arquitetura"]
-        spec = res.get("especificacao")
-        status[nome] = {
-            "status": "ok",
-            "pasta": res["pasta"],
-            "review_alerts": spec.review_alerts if spec else [],
-            "metricas": res["metricas"],
-        }
+    # Um sandbox (e uma rede com banco/cache) para o projeto inteiro: os módulos
+    # compartilham o código, o banco com as migrations e o cache do Maven/npm.
+    with ExitStack() as pilha:
+        agentes_projeto = None
+        if implementa and not fabrica_agentes:
+            amb = (pilha.enter_context(ambiente_sandbox(codigo, contexto))
+                   if lado_final(ate) else None)
+            agentes_projeto = criar_agentes(contexto, amb)
+        if implementa:
+            agentes_base = fabrica_agentes(contexto) if fabrica_agentes else agentes_projeto
+            # Endpoints de execuções anteriores (se houver) ajudam a base (ex.: login)
+            plano_base = implementacao.garantir_base(
+                contexto, list(contexto.build_order), pasta / "base", codigo,
+                agentes_base, lado_final(ate), max_tentativas,
+                arquiteturas=arquiteturas or None)
+
+        for numero, nome in enumerate(contexto.build_order, 1):
+            if filtro and nome.strip().lower() not in filtro:
+                continue
+            descricao = _descricao_modulo(nome, modulos_dir, declarados, entradas)
+            print(f"\n=== Módulo {nome} ===")
+            externos = {e.path for n, a in arquiteturas.items() if n != nome
+                        for e in a.endpoints}
+            try:
+                res = processar_modulo(
+                    nome, descricao,
+                    outros_modulos=mensagens.resumo_outros_modulos(contexto, nome, arquiteturas),
+                    ate=ate, de=de,
+                    agentes=fabrica_agentes(contexto) if fabrica_agentes else agentes_projeto,
+                    saida_dir=str(pasta), max_tentativas=max_tentativas,
+                    contexto=contexto, plano_base=plano_base,
+                    codigo_dir=str(codigo), numero_migracao=numero,
+                    endpoints_externos=externos)
+            except PipelineError as e:
+                print(f"  FALHA em {nome}: {e}")
+                status[nome] = {"status": "falhou", "erro": str(e)}
+                continue
+            if "arquitetura" in res:
+                arquiteturas[nome] = res["arquitetura"]
+            spec = res.get("especificacao")
+            status[nome] = {
+                "status": "ok",
+                "pasta": res["pasta"],
+                "review_alerts": spec.review_alerts if spec else [],
+                "metricas": res["metricas"],
+            }
 
     _salvar_json(pasta / "projeto.json", {
         "projeto": nome_projeto,
@@ -204,7 +213,6 @@ def processar_projeto(
 
 def _arquiteturas_existentes(pasta: Path, contexto: ProjectContext) -> Dict[str, object]:
     """Arquiteturas já geradas em execuções anteriores (úteis com --apenas/--de)."""
-    from schemas import ModuleArchitecture
     achadas = {}
     for nome in contexto.build_order:
         arq = pasta / slugify(nome) / "4_arquitetura.json"
