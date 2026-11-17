@@ -25,6 +25,11 @@ CONTEXTO_PADRAO = os.environ.get(
 
 # Quantos arquivos cada chamada de Implementador gera
 IMPL_LOTE = max(1, int(os.environ.get("IMPL_LOTE", "5")))
+# Tamanho máximo de um lote que tenha arquivo pesado (serviço, mapper,
+# controller, listener, segurança, teste). Com 5 desses num lote, o agente leu
+# 26–37 arquivos antes de escrever o primeiro e estourou o limite de passos
+# (Customers, lote 10; relato 11).
+IMPL_LOTE_PESADO = max(1, int(os.environ.get("IMPL_LOTE_PESADO", "2")))
 
 # Limite (caracteres) do conteúdo integral de dependências anexado a cada lote.
 # Acima dele, os arquivos seguintes vão só com as assinaturas públicas.
@@ -62,3 +67,16 @@ LIMITE_PASSOS_SANDBOX = max(10, int(os.environ.get("LIMITE_PASSOS_SANDBOX", "120
 # Lotes por execução em cada etapa de implementação (0 = sem limite). Ao atingir,
 # a etapa para com os lotes aprovados salvos; uma nova execução retoma dali.
 LOTES_POR_EXECUCAO = max(0, int(os.environ.get("LOTES_POR_EXECUCAO", "0")))
+# Subagente general-purpose (ferramenta `task`) que o create_deep_agent adiciona
+# sozinho. Desligado: nunca foi usado nos lotes medidos, a descrição custa ~500
+# tokens por chamada ao modelo e as chamadas dele não ficavam nas métricas (relato 10).
+SANDBOX_SUBAGENTE = os.environ.get("SANDBOX_SUBAGENTE", "0").lower() in ("1", "true", "sim")
+# Grava as mensagens de cada tentativa de cada lote em <pasta>/historico/ (o que o
+# agente leu, rodou e escreveu), para analisar o consumo depois da execução.
+SALVAR_HISTORICO = os.environ.get("SALVAR_HISTORICO", "1").lower() not in ("0", "false", "nao", "não")
+# Pede ao Gemini os resumos do raciocínio (include_thoughts) nos Implementadores
+# do sandbox: vão para o histórico e mostram por que o agente leu cada arquivo.
+# Só para diagnóstico: o langchain-google-genai os reenvia em toda chamada
+# seguinte, e no lote 10 do Customers isso custou ~0,96 de 2,49 mi de entrada
+# (relato 11).
+MOSTRAR_RACIOCINIO = os.environ.get("MOSTRAR_RACIOCINIO", "0").lower() in ("1", "true", "sim")

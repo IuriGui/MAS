@@ -1,5 +1,7 @@
 # Alterações
 
+- [Relato 11. Leituras uma por vez e lotes de serviço grandes demais](#relato-11-leituras-uma-por-vez-e-lotes-de-serviço-grandes-demais)
+- [Relato 10. Contabilização completa, prefixo menor e o que o agente procurava](#relato-10-contabilização-completa-prefixo-menor-e-o-que-o-agente-procurava)
 - [Relato 9. Redução de custo por lote: recorte da mensagem, verificação proporcional e medição](#relato-9-redução-de-custo-por-lote-recorte-da-mensagem-verificação-proporcional-e-medição)
 - [Relato 8. Execução com sandbox: quatro erros documentados, não corrigidos](#relato-8-execução-com-sandbox-quatro-erros-documentados-não-corrigidos)
 - [Relato 7. Organização dos arquivos](#relato-7-organização-dos-arquivos)
@@ -9,6 +11,378 @@
 - [Relato 3. Limites contra repetição sem fim e primeira execução real](#relato-3-limites-contra-repetição-sem-fim-e-primeira-execução-real)
 - [Relato 2. Planejador e Implementadores (backend e frontend)](#relato-2-planejador-e-implementadores-backend-e-frontend)
 - [Relato 1. Integração do Arquiteto-chefe e execução por projeto](#relato-1-integração-do-arquiteto-chefe-e-execução-por-projeto)
+
+---
+
+## Relato 11. Leituras uma por vez e lotes de serviço grandes demais
+
+Data: 17/11/2026. Branch `deep-agents`. Ainda não executado com o Gemini.
+
+### Por quê
+
+Na primeira execução com o relato 10 (Customers, ver "Resultado com LLM" no
+relato 10), o lote 10 tinha o mapper e quatro serviços. As duas tentativas
+fizeram 60 chamadas ao modelo cada, só lendo (35 e 40 `read_file`, 22 e 15
+`grep`). Bateram o limite de 120 passos sem escrever nenhum arquivo: 8,4 mi de
+entrada jogados fora, e a execução parou.
+
+O que os históricos (`saida/sistema/customers/historico/`) mostram:
+
+1. **Uma ferramenta por chamada.** Nas 166 chamadas ao modelo dos lotes 9 e 10,
+   nenhuma pediu mais de uma ferramenta. Cada leitura reenviou o contexto
+   inteiro, ~40–70 mil tokens no lote 10.
+2. **Cinco arquivos pesados no mesmo lote, e nada escrito antes de ler tudo.**
+   - O mapper e os quatro serviços dependem de 48 arquivos. A mensagem tinha
+     146 mil caracteres, 82 mil só de assinaturas.
+   - O agente leu 26 e 37 arquivos distintos (~6–7 por arquivo do lote) antes
+     de escrever o primeiro.
+3. **Arquivos lidos em pedaços de 100 linhas.**
+   - O `DocumentValidator` (370 linhas) foi lido em 3 vezes, e cada
+     repositório em 2.
+   - Foram ~10 leituras só de paginação.
+4. **O prompt mandava ler.**
+   - O `MODO_SANDBOX` dizia "Read any existing file with read_file/grep instead
+     of guessing its API".
+   - O cabeçalho de cada dependência dizia "read the file only if you need the
+     implementation".
+   - O agente leu os arquivos inteiros mesmo tendo as assinaturas.
+5. **O agente copiou padrão de outro módulo.**
+   - Foram ~8 leituras no Catalog (serviços, `CatalogCacheConfig`, controller,
+     `application.yml`), procurando como fazer cache e transação.
+   - O `CustomersCacheConfig` estava planejado para o lote seguinte. Nenhum
+     serviço o declarava em `depends_on`, apesar de usarem os caches dele.
+
+O Gemini não devolveu o texto do raciocínio (21,7 mil tokens de raciocínio no
+lote 9, nenhum texto). Por isso os motivos dos itens 4 e 5 são inferidos, não
+lidos.
+
+### Mudanças
+
+**Prompt (`MODO_SANDBOX`):**
+- pedir as leituras e buscas independentes na mesma resposta (várias
+  ferramentas por chamada);
+- ler código de uma vez (`read_file` com `limit=500`);
+- as assinaturas da mensagem estão completas: ler um arquivo só para ver o
+  corpo de um método, nunca para confirmar a API ou copiar o estilo;
+- trabalhar arquivo por arquivo, escrevendo cada um assim que tiver o
+  necessário;
+- nos `.jsonl`, fazer `grep` no documento certo, nunca `read_file` do
+  documento inteiro nem `grep` na pasta toda.
+
+Saiu o "Read any existing file … instead of guessing its API". O cabeçalho das
+dependências passou a dizer "public signatures, complete; read the file only to
+see a method body".
+
+**Lotes (`montar_lotes`):**
+- **Lote pesado:** um lote com arquivo pesado (serviço, mapper, controller,
+  listener, segurança, teste) tem no máximo `IMPL_LOTE_PESADO` arquivos (padrão
+  2). Lotes de DTO, evento e entidade continuam com `IMPL_LOTE` (5).
+- **Configuração primeiro:** as configurações do módulo vão o mais cedo que as
+  dependências permitem.
+- **Efeito:**
+  - Customers: os 15 arquivos restantes passam de 3 para 8 lotes.
+  - Users, plano inteiro: de 11 para 16 lotes.
+  - Catalog: de 10 para 15 lotes.
+
+**Configurações nas dependências dos serviços**
+(`implementacao.configs_do_modulo`): lotes de serviço recebem as assinaturas das
+configurações do módulo já geradas, mesmo fora do `depends_on`.
+
+**Raciocínio no histórico** (`MOSTRAR_RACIOCINIO=1`, só Gemini, **desligado
+por padrão**, ver "Resultado com LLM"): `include_thoughts=True` nos
+Implementadores do sandbox, para o histórico mostrar por que o agente lê cada
+arquivo.
+
+**Histórico por execução:** o arquivo leva a data e a hora
+(`<etapa>.loteNN.tK.<AAAAMMDD-HHMMSS>.json`). Antes, um lote refeito numa
+nova execução sobrescrevia o histórico da anterior. Foi o que aconteceu com a
+tentativa 1 do lote 10 antigo; a tentativa 2 continua lá.
+
+Testes: 5 novos em `tests/test_consumo.py`. Seis testes antigos foram ajustados
+ao novo tamanho dos lotes; o que reproduz um lote real da base usa os tamanhos
+da época. 144 no total.
+
+### O que observar
+
+- **Ferramentas por chamada:** quantas chamadas ao modelo pedem mais de uma
+  ferramenta (contar nos históricos).
+- **Leituras por lote:** comparar os lotes de serviço com os 60 da tentativa
+  anterior.
+- **Lotes menores custam mais em prefixo:** são mais lotes, e cada um paga o
+  prefixo e a exploração de novo. Comparar o total por arquivo gerado, não por
+  lote.
+- **Raciocínio:** a entrada sem cache por chamada, antes e depois de ligar o
+  `include_thoughts`.
+
+### Resultado com LLM
+
+Customers, lote 10 com a nova divisão (`CustomersCacheConfig` +
+`CustomersMapper`), `LOTES_POR_EXECUCAO=1`, `include_thoughts` ligado.
+**Aprovado de primeira.**
+
+| | Entrada | Sem cache | Saída (raciocínio) | Chamadas | Ferramentas | Tempo |
+|---|---|---|---|---|---|---|
+| Lote 10 antigo (5 arquivos, 2 tentativas) | 8,37 mi | 410 mil | 30,5 mil | 120 | 120 leituras, nada escrito | — |
+| **Lote 10 novo (2 arquivos)** | **2,49 mi** | **208 mil** | **25,2 mil (15,7 mil)** | **50** | 18 `read_file`, 18 `grep`, 8 `execute`, 2 `ls`, 1 `glob`, 2 `write_file` | 7,3 min |
+
+O que os resumos do raciocínio mostraram:
+
+1. **O raciocínio reenviado é cobrado como entrada.** Em passos em que o
+   agente acrescentou ~3 mil caracteres de raciocínio e ~100 de outra coisa, a
+   entrada da chamada seguinte subiu ~2.300 tokens. A regressão sobre os 49
+   passos dá ~0,66 token por caractere de raciocínio, contra ~0,26 para o resto.
+   Estimativa: ~0,96 dos 2,49 mi do lote foram raciocínio reenviado. **Por
+   isso o `MOSTRAR_RACIOCINIO` ficou desligado por padrão.**
+2. **Nenhuma chamada pediu mais de uma ferramenta** (0 de 50), apesar do prompt.
+3. **O `limit=500` foi ignorado:** os DTOs continuaram a ser lidos em pedaços
+   de 100 linhas.
+4. **Metade das chamadas (~24) foi uma investigação de cache.** O plano e a
+   arquitetura pedem Caffeine, mas o `pom.xml` da base não tem a dependência, e
+   o agente não pode mexer fora do lote. Ele rodou `mvn dependency:tree`, leu o
+   `CatalogCacheConfig` e acabou usando `ConcurrentMapCacheManager`, **sem o TTL
+   de 300 s pedido no plano**. É um desencontro entre o plano do módulo e o
+   build da base, não leitura à toa.
+
+   **O NFR04 não é atendido.** A classe lê `ttl-seconds` e `max-size` e os
+   escreve no log, mas o `ConcurrentMapCacheManager` não expira nem limita
+   nada. O relato do agente diz "adhering to NFR04 (300s TTL and 10,000 max
+   capacity)", o que é falso. É o mesmo padrão dos erros 3 e 4 do relato 8: um
+   problema que o lote não resolve e que o relato não aponta.
+5. **Os DTOs do lote 9 foram relidos** para montar o mapper (~12 leituras),
+   mesmo com as assinaturas na mensagem.
+6. **Verificação além da pedida:** depois do VERIFY (`mvn -q compile`) passar,
+   rodou `mvn compile`, `mvn test-compile`, `git status` e dois `ls`. Foram 6
+   chamadas a ~83 mil tokens cada.
+
+**Pendências (não aplicadas):**
+- **Uma ferramenta que leia vários arquivos de uma vez,** já que o modelo não
+  agrupa chamadas.
+- **`read` do sandbox com limite maior por padrão para código,** já que o
+  modelo ignora o `limit=500`.
+- **Terminar quando o VERIFY passar.**
+- **Dependências que o plano do módulo exige e o build da base não tem:**
+  validar no plano, ou permitir que o lote as declare.
+
+---
+
+## Relato 10. Contabilização completa, prefixo menor e o que o agente procurava
+
+Data: 17/11/2026. Branch `deep-agents`. Executado depois com o Gemini (ver
+"Resultado com LLM", no fim deste relato).
+
+### Por quê
+
+Feito depois de uma auditoria do consumo, que partiu da execução do relato 8
+(base + Users: 33,4 mi de entrada em 22 lotes, todos aprovados de primeira).
+98% da entrada veio dos Implementadores no sandbox. Não houve retry, loop
+infinito nem contexto compartilhado entre agentes. O custo vem de como cada lote
+funciona.
+
+**Modelo de custo de um lote.** Cada lote é uma conversa nova, e cada chamada ao
+modelo reenvia o prefixo fixo (system prompt, descrição das ferramentas,
+mensagem do lote) mais todo o histórico do lote:
+
+```
+entrada do lote ≈ N × prefixo + crescimento do histórico × N² / 2
+```
+
+Aqui, N é o número de chamadas ao modelo. Nos números do lote 8 do Customers
+(58 chamadas, ~20 mil tokens de prefixo, 2,17 mi no total), cerca de metade vai
+para o prefixo e metade para o histórico. N multiplica os dois termos, e 46 das
+57 chamadas de ferramenta desse lote foram leituras e buscas.
+
+A sumarização do deepagents existe, mas na prática nunca dispara. Para o
+`gemini-3.8-flash` (janela de 1.048.576 tokens), o gatilho padrão é 85% da
+janela, ~891 mil tokens por chamada, contra ~37 mil de média medida.
+
+**O que a auditoria encontrou:**
+
+1. **Medição incompleta.**
+   - O cache entrava como entrada cheia, e o raciocínio não era separado da
+     saída.
+   - Não eram contadas as chamadas que não ficam no estado final do agente:
+     o subagente `task`, a sumarização e as chamadas de um agente estruturado
+     cortado pelo limite de passos (`GraphRecursionError`).
+   - Sem o histórico das mensagens, o que o agente leu nos lotes do Users não
+     tem como ser reconstruído.
+2. **Subagente que ninguém pediu.** O `create_deep_agent` adiciona sozinho um
+   subagente general-purpose (ferramenta `task`). A descrição dele ocupa ~2 mil
+   caracteres em toda chamada ao modelo, e ele não apareceu em nenhum lote
+   medido.
+3. **PROJECT CONTEXT inteiro no system prompt dos Implementadores** (19,2 mil
+   caracteres com as regras). Isso inclui `module_map`, ADRs, riscos e premissas.
+   As decisões que valem para o código já estão em `tech_stack` e
+   `cross_cutting_decisions`.
+4. **Documentos de `.mas/` em JSON indentado.** O plano do Customers tem 1.727
+   linhas, e `read_file` lê 100 de cada vez. O `grep` do deepagents devolve, por
+   padrão, só nomes de arquivo; com `output_mode="content"`, devolve uma linha
+   solta (`"path": ...`) sem o resto do item. No lote 7, foram 7 leituras e 5
+   buscas no `plano.json`.
+5. **O que o agente procurava** (registro de leituras dos lotes 7 e 8,
+   relato 9):
+   - quem usa os DTOs do lote;
+   - os endpoints que usam cada DTO;
+   - os campos das entidades, para copiar para os DTOs.
+
+   As propostas P1–P3 foram recusadas no relato 9 por somarem "só 20–30
+   chamadas por lote". Revisto: cada leitura é uma chamada a mais ao modelo
+   (aumenta N), e sua saída é reenviada até o fim do lote.
+
+### Mudanças
+
+**Contabilização** (`mas/pipeline/execucao.py`):
+- `reasoning_tokens`: o raciocínio, que o `langchain-google-genai` já soma em
+  `output_tokens`.
+- A entrada sem cache passa a aparecer no relatório e no `metricas.md`
+  (entrada − `cache_read_tokens`).
+- `ContadorDeUso`, um callback passado em toda invocação, soma o uso de todas
+  as chamadas ao modelo, inclusive as que não ficam no estado:
+  - os totais passam a ser o maior valor entre o estado e o contador;
+  - a diferença fica em `input_tokens_fora_do_historico` e
+    `output_tokens_fora_do_historico`;
+  - não depende de `response_metadata["model_name"]`, ao contrário do
+    `UsageMetadataCallbackHandler`.
+- As métricas de cada lote são medidas num dicionário próprio e somadas à etapa.
+  Antes eram a diferença entre antes e depois do lote, o que deixava o
+  `maior_saida_tool` sem valor por lote.
+- **Histórico:** cada tentativa de cada lote grava as mensagens em
+  `<pasta>/historico/<etapa>.loteNN.tK.json`. Desliga com `SALVAR_HISTORICO=0`.
+- `metricas.md` ganhou as colunas Em cache e Raciocínio, e uma linha "fora do
+  histórico" quando houver.
+- O relatório por lote mostra entrada em cache e sem cache, raciocínio, a maior
+  saída de ferramenta e o que ficou fora do histórico.
+
+**Subagente desligado** (`fabrica.desligar_subagente`): registra para o
+provedor do modelo um `HarnessProfile` com
+`GeneralPurposeSubagentProfile(enabled=False)`. É o único jeito que o deepagents
+0.7.34 oferece. O registro vale para o processo inteiro (só os Implementadores
+usam deepagents). Religa com `SANDBOX_SUBAGENTE=1`.
+
+**PROJECT CONTEXT enxuto** (`prompts.com_contexto(..., enxuto=True)`):
+- **Mantém:** `context_version`, `architectural_style`, `tech_stack`,
+  `cross_cutting_decisions`, `naming_conventions` e
+  `inter_module_communication`.
+- **Vale para:** os Implementadores, no sandbox e fora dele.
+- **Continua com o contexto inteiro:** os demais agentes.
+- **Fica fixo para todos os lotes:** recortar por lote mudaria o começo da
+  conversa a cada lote e perderia o cache do provedor.
+
+**Documentos em JSONL** (`mensagens.documento_jsonl`, `gravar_documentos`):
+- Especificação, arquitetura e plano vão para `.mas/<módulo>/` com um item por
+  linha e a seção de origem (`{"section": "backend_files", "path": ...}`).
+- `grep` com `output_mode="content"` devolve o item inteiro. A mensagem e o
+  `MODO_SANDBOX` dizem isso.
+- A versão `.json` antiga do mesmo documento é apagada da pasta.
+
+**O que o agente procurava (P1–P3):**
+- **P1, "quem usa"** (`mensagens.usado_por`): para cada DTO, evento ou tipo do
+  frontend no lote, os arquivos do plano que o importam, com tipo e propósito.
+  Não vale para outros tipos de arquivo: num lote de entidade, a lista chegava a
+  9 mil caracteres por passo, sem evidência de que o agente procurasse isso.
+- **P2, endpoints dos DTOs** (`mensagens._endpoints_do_lote`): além dos
+  endpoints citados pelo lote, os que citam um DTO ou tipo do lote (palavra
+  inteira) no request ou no response.
+- **P3, entidades dos consumidores**
+  (`implementacao.entidades_dos_consumidores`): em lotes de DTO e evento, as
+  assinaturas das entidades que os consumidores do lote importam (ex.: a do
+  mapper), sem os setters.
+
+### Medido sem LLM
+
+Reconstrução dos lotes do backend do Users e do Customers a partir dos planos e
+do código em `saida/sistema`:
+
+| Parte | Antes | Agora |
+|---|---|---|
+| System prompt do Implementador backend | 19.246 | 11.117 |
+| Descrição das ferramentas | 12.184 | 10.199 |
+| **Prefixo fixo por chamada** | | **−10.114 caracteres (~2,5 mil tokens)** |
+
+O que P1–P3 acrescentam à mensagem (média por lote, máximo entre parênteses, em
+caracteres):
+
+| Módulo | P1 | P2 | P3 |
+|---|---|---|---|
+| Users | 933 (2.492) | 0 | 272 (2.991) |
+| Customers | 1.388 (3.928) | 862 (6.508) | 2.071 (4.626) |
+
+| Documento (Customers) | JSON indentado | JSONL |
+|---|---|---|
+| Especificação | 39.682 caracteres / 177 linhas | 39.849 / 35 |
+| Arquitetura | 31.091 / 750 | 27.640 / 56 |
+| Plano | 61.309 / 1.727 | 51.563 / 85 |
+
+**Saldo por chamada ao modelo:**
+- Users: ~−8,9 mil caracteres.
+- Customers: ~−5,8 mil caracteres.
+- **Exceção:** nos lotes só de DTO do Customers, a mensagem cresce até ~14 mil
+  caracteres e o saldo fica ~+4 mil por chamada.
+
+**É uma aposta.** No lote 8 (DTOs), as leituras de código, plano, arquitetura e
+especificação foram ~41 chamadas de ferramenta, e ~80 mil caracteres entraram no
+histórico. Só compensa se o agente deixar de ler.
+
+### O que observar na próxima execução
+
+- **P1–P3:** `leituras` e `chamadas_modelo` nos lotes de DTO e evento. Se as
+  leituras de entidades e de `.mas/` não caírem, P1–P3 só aumentaram a mensagem.
+- **JSONL:** um `read_file` sem `offset` agora traz o plano inteiro (39–52 mil
+  caracteres) de uma vez. Se aparecer `read_file .../plano.jsonl` nas leituras, a
+  orientação de usar `grep` não funcionou.
+- **Contexto enxuto:** erros ligados a uma decisão que só estava nas ADRs ou
+  premissas (ex.: eventos em processo em vez de broker, que hoje também está em
+  `inter_module_communication`).
+- **Fora do histórico:** deve ficar em zero. Se não ficar, há chamadas que não
+  são do agente principal.
+
+**Comparação:** usar como baseline o commit `eb7e11d`, com os mesmos artefatos
+1–5 e o mesmo plano da base. Comparar por lote e por arquivo gerado:
+- entrada total e entrada sem cache;
+- saída e raciocínio;
+- chamadas ao modelo e leituras;
+- e a qualidade: lotes aprovados de primeira, verificação final e testes.
+
+**Não aplicadas agora** (detalhes, riscos e testes ficam numa pasta local,
+`reducao de tokens/`, fora do git):
+- compactação periódica do histórico (já tentada na `contexto-enxuto` sem
+  ganho);
+- geração estruturada para DTOs e eventos;
+- corte da saída do `execute` do modelo no sandbox;
+- orçamento de tokens e limite de chamadas por lote;
+- recorte da mensagem da base.
+
+Testes: 14 novos em `tests/test_consumo.py` (139 no total).
+
+### Resultado com LLM
+
+Customers, lotes 9 e 10 do backend, em 17/11/2026. A execução retomou do lote 9
+sem `LOTES_POR_EXECUCAO` e parou no lote 10.
+
+| Lote | Conteúdo | Entrada | Sem cache | Saída (raciocínio) | Chamadas | Leituras e buscas | Resultado |
+|---|---|---|---|---|---|---|---|
+| 7 (antes) | 5 DTOs | 1,28 mi | 116 mil | 15,8 mil (—) | 37 | 29 | aprovado |
+| 8 (antes) | 5 DTOs | 2,17 mi | 165 mil | 19,6 mil (—) | 58 | 49 | aprovado |
+| 9 | 5 DTOs | 2,06 mi | 150 mil | 29,1 mil (21,7 mil) | 46 | 38 | aprovado |
+| 10, tentativa 1 | mapper + 4 serviços | 4,30 mi | 210 mil | 24,6 mil (21,6 mil) | 60 | 60 | limite de passos, nada escrito |
+| 10, tentativa 2 | mapper + 4 serviços | 4,07 mi | 200 mil | 5,9 mil (3,1 mil) | 60 | 60 | limite de passos, nada escrito |
+
+Total da execução: 10,4 mi de entrada. Nada ficou fora do histórico (o
+subagente não foi usado e o contador bateu com as mensagens).
+
+**Lote 9:**
+- **P3 funcionou:** o agente não leu nenhuma entidade.
+- **Mas leu DTOs vizinhos** de Customers, Users e Catalog (~12 leituras), para
+  copiar o estilo.
+- **O JSONL saiu pela culatra no `grep`:** o agente buscou o nome de cada DTO
+  do lote na pasta `.mas/` inteira. O nome aparece em várias entradas (o
+  arquivo, os consumidores, os endpoints), e com JSONL cada resultado traz a
+  entrada inteira: 5–14 mil caracteres por busca.
+- **Leitura inteira do plano:** numa das leituras, o agente abriu o
+  `plano.jsonl` inteiro (~52 mil caracteres).
+- **Saldo:** sem ganho claro sobre os lotes 7 e 8.
+
+**Lote 10:** só leituras, nos dois casos. A análise e as correções estão no
+relato 11.
 
 ---
 
@@ -190,8 +564,46 @@ em `leituras`, na etapa (`metricas.json`) e em cada lote (manifesto). O
 o conteúdo escrito já conta como saída do modelo. Só vale para as próximas
 execuções: o histórico dos lotes 4–6 não foi guardado.
 
+**Lotes 7 e 8, com o registro de leituras** (17/11/2026,
+`LOTES_POR_EXECUCAO=2`, aprovados de primeira):
+
+| Lote | Conteúdo | Entrada | Em cache | Chamadas ao modelo | Leituras e buscas |
+|---|---|---|---|---|---|
+| 7 | 5 DTOs de requisição | 1,28 mi | 1,16 mi (91%) | 37 | 29 |
+| 8 | 1 DTO de requisição + 4 de resposta | 2,17 mi | 2,00 mi (92%) | 58 | 46 |
+
+Média dos lotes 4–8: 1,61 mi por lote (contra 1,83 mi nos lotes 1–3).
+
+O que foi lido, em caracteres devolvidos:
+
+| Onde | Lote 7 | Lote 8 |
+|---|---|---|
+| Código já gerado (entidades, DTOs vizinhos) | 9 leituras, 21,6 mil | 16 leituras, 42,1 mil |
+| `.mas/plano.json` | 7 leituras + 5 `grep`, 20,4 mil | 5 leituras + 7 `grep`, 16,7 mil |
+| `.mas/especificacao.json` | 1 leitura + 1 `grep`, 22,2 mil | 1 leitura + 2 `grep`, 3,8 mil |
+| `.mas/arquitetura.json` | 2 `grep` | 3 leituras + 7 `grep`, 16,9 mil |
+| `.mas/migracao.sql` | 1 leitura, 4,9 mil | — |
+
+As buscas foram pelo nome dos próprios arquivos do lote, por
+`CustomersMapper` e por `"path": "/api/v1/`. O agente procurava duas coisas
+que o recorte não manda:
+- quem usa os DTOs do lote (mapper, serviço, controller);
+- os endpoints cujo request ou response é aquele DTO.
+
+As entidades foram lidas para copiar os campos para os DTOs de resposta.
+
+Três ajustes foram propostos:
+- P1: "usado por" para cada arquivo do lote;
+- P2: endpoints cujo request ou response cita o DTO;
+- P3: assinaturas das entidades usadas por quem consome o lote.
+
+**Decisão: não aplicados.** As leituras somam 20–30 chamadas por lote e
+40–80 mil caracteres. Não foram consideradas um problema grande o bastante para
+justificar a mudança.
+
 **Próximos passos possíveis:**
-1. Rodar 2 ou 3 lotes com o registro, para saber o que o agente procura.
+1. ~~Rodar 2 ou 3 lotes com o registro, para saber o que o agente procura.~~
+   Feito (lotes 7 e 8).
 2. Pôr na mensagem um exemplo curto de um arquivo do mesmo tipo já gerado,
    para evitar a exploração.
 3. Limpar do histórico as saídas antigas de ferramentas (C1).

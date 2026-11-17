@@ -13,8 +13,8 @@
   workspace do container e compila/testa lá; o pipeline colhe o lote do disco
   (codigo/coleta.py), repara caminhos, descarta mudanças fora do lote e valida.
 """
-import copy
 import json
+import time
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set
 
@@ -26,10 +26,11 @@ from mas.codigo.arquivos import (caminho_seguro, caminhos_em_disco, gravar,
 from mas.codigo.assinaturas import assinaturas
 from mas.codigo.coleta import ColetaSandbox
 from mas.codigo.ddl import gerar_ddl, usa_sql
-from mas.config import (IMPL_LIMITE_CONTEXTO, IMPL_LOTE, LIMITE_PASSOS_AGENTE,
-                        LOTES_POR_EXECUCAO,
-                        LIMITE_PASSOS_SANDBOX, MAX_TENTATIVAS)
-from mas.pipeline.execucao import CAMPOS_SOMADOS, PipelineError, executar_agente
+from mas.config import (IMPL_LIMITE_CONTEXTO, IMPL_LOTE, IMPL_LOTE_PESADO,
+                        LIMITE_PASSOS_AGENTE, LIMITE_PASSOS_SANDBOX, LOTES_POR_EXECUCAO,
+                        MAX_TENTATIVAS, SALVAR_HISTORICO)
+from mas.pipeline.execucao import (PipelineError, executar_agente, salvar_historico,
+                                   somar_metricas)
 from mas.relatorio import ler_manifestos, renderizar_relatorio
 from mas.schemas import (FinalSpecification, ImplementationPlan, ModuleArchitecture,
                          ModuleDataModel, PlannedFile, ProjectContext)
@@ -47,27 +48,50 @@ def _ler_json(caminho: Path) -> dict:
 
 
 # ------------------------------------------------------------- lotes
-def montar_lotes(arquivos: List[PlannedFile], tamanho: int = IMPL_LOTE) -> List[List[PlannedFile]]:
+# Arquivos que exigem ler muito código para serem escritos. Um lote com 5 deles
+# (mapper + 4 serviços) dependia de 48 arquivos, e o agente leu 26–37 antes de
+# escrever o primeiro, até estourar o limite de passos (relato 11).
+KINDS_PESADOS = {"service", "mapper", "controller", "listener", "security", "test"}
+# Configurações do módulo (nomes de cache, beans) são usadas pelos serviços sem
+# constar no depends_on deles; vão o mais cedo que as dependências permitirem.
+KINDS_PRIMEIRO = {"config"}
+
+
+def montar_lotes(arquivos: List[PlannedFile], tamanho: int = IMPL_LOTE,
+                 tamanho_pesado: int = IMPL_LOTE_PESADO) -> List[List[PlannedFile]]:
     """Agrupa em lotes respeitando depends_on: um arquivo só entra num lote
     quando suas dependências (dentro do plano) já foram geradas ou estão no
-    mesmo lote. Sem saída possível (ciclo), o restante vai na ordem do plano."""
+    mesmo lote. Sem saída possível (ciclo), o restante vai na ordem do plano.
+
+    Um lote com arquivo pesado (KINDS_PESADOS) tem no máximo `tamanho_pesado`
+    arquivos. Configurações (KINDS_PRIMEIRO) vêm antes dos demais."""
     tamanho = max(1, tamanho)  # tamanho 0 faria o laço nunca avançar
+    tamanho_pesado = max(1, min(tamanho_pesado, tamanho))
     planejados = {f.path for f in arquivos}
-    pendentes = list(arquivos)
+    pendentes = sorted(arquivos, key=lambda f: f.kind not in KINDS_PRIMEIRO)  # estável
     feitos: Set[str] = set()
     lotes = []
-    while pendentes:
+
+    def preencher(candidatos: List[PlannedFile], checar_deps: bool) -> List[PlannedFile]:
         lote: List[PlannedFile] = []
         no_lote: Set[str] = set()
-        for f in pendentes:
+        pesado = False
+        for f in candidatos:
             deps = {d for d in f.depends_on if d in planejados}
-            if deps <= feitos | no_lote:
-                lote.append(f)
-                no_lote.add(f.path)
-                if len(lote) == tamanho:
-                    break
-        if not lote:
-            lote = pendentes[:tamanho]
+            if checar_deps and not deps <= feitos | no_lote:
+                continue
+            com_f = pesado or f.kind in KINDS_PESADOS
+            if len(lote) + 1 > (tamanho_pesado if com_f else tamanho):
+                continue
+            lote.append(f)
+            no_lote.add(f.path)
+            pesado = com_f
+            if len(lote) == (tamanho_pesado if pesado else tamanho):
+                break
+        return lote
+
+    while pendentes:
+        lote = preencher(pendentes, checar_deps=True) or preencher(pendentes, checar_deps=False)
         lotes.append(lote)
         feitos |= {f.path for f in lote}
         pendentes = [f for f in pendentes if f.path not in feitos]
@@ -76,7 +100,8 @@ def montar_lotes(arquivos: List[PlannedFile], tamanho: int = IMPL_LOTE) -> List[
 
 def conteudo_dependencias(raiz: Path, lote: List[PlannedFile],
                           limite: int = IMPL_LIMITE_CONTEXTO,
-                          so_assinaturas: bool = False) -> str:
+                          so_assinaturas: bool = False,
+                          plano_lado: Optional[List[PlannedFile]] = None) -> str:
     """Conteúdo dos arquivos (já gravados) de que o lote depende.
 
     Até `limite` caracteres vão inteiros; os seguintes vão só com as
@@ -86,7 +111,80 @@ def conteudo_dependencias(raiz: Path, lote: List[PlannedFile],
     Javadoc de cada método. O agente lê o arquivo inteiro com read_file quando
     precisa da implementação. Mandar o código inteiro custava caro: a mensagem
     é reenviada a cada passo do agente (relato 8, custo).
+
+    `plano_lado`: com ele, lotes de DTO e evento recebem também as assinaturas
+    das entidades que os consumidores do lote (mapper, serviço) usam. O agente
+    lia essas entidades para copiar os campos (relato 9, lotes 7 e 8).
     """
+    partes = [_dependencias_diretas(raiz, lote, limite, so_assinaturas)]
+    if plano_lado:
+        partes.append(entidades_dos_consumidores(raiz, lote, plano_lado))
+        partes.append(configs_do_modulo(raiz, lote, plano_lado))
+    return "\n\n".join(p for p in partes if p)
+
+
+# Quem usa configurações do módulo (nomes de cache, propriedades) sem declará-las
+KINDS_QUE_USAM_CONFIG = {"service", "listener"}
+
+
+def configs_do_modulo(raiz: Path, lote: List[PlannedFile],
+                      plano_lado: List[PlannedFile]) -> str:
+    """Assinaturas das configurações do módulo já geradas, para lotes de serviço.
+    No lote 10 do Customers, os serviços usavam os caches do CustomersCacheConfig,
+    que não estava no depends_on deles, e o agente o procurou com grep."""
+    if not _kinds_do_lote(lote) & KINDS_QUE_USAM_CONFIG:
+        return ""
+    diretas = {d for f in lote for d in f.depends_on} | {f.path for f in lote}
+    return "\n\n".join(
+        f"=== {c.path} === (configuration of this module; public signatures)\n"
+        f"{assinaturas(c.path, (raiz / c.path).read_text(encoding='utf-8'))}"
+        for c in plano_lado
+        if c.kind == "config" and c.path not in diretas and (raiz / c.path).is_file())
+
+
+def _kinds_do_lote(lote: List[PlannedFile]) -> set:
+    return {f.kind for f in lote}
+
+
+# Lotes cujos arquivos copiam campos de entidades que eles não importam
+KINDS_COM_ENTIDADE_DOS_CONSUMIDORES = {"dto", "event"}
+
+
+def entidades_dos_consumidores(raiz: Path, lote: List[PlannedFile],
+                               plano_lado: List[PlannedFile]) -> str:
+    """Assinaturas das entidades usadas por quem consome os DTOs/eventos do lote
+    (ex.: o mapper que converte a entidade no DTO de resposta), quando o próprio
+    lote não depende delas."""
+    kind = {f.path: f.kind for f in plano_lado}
+    no_lote = {f.path for f in lote}
+    diretas = {d for f in lote for d in f.depends_on}
+    usadas: Dict[str, List[str]] = {}       # entidade -> consumidores
+    for f in lote:
+        if f.kind not in KINDS_COM_ENTIDADE_DOS_CONSUMIDORES:
+            continue
+        for c in mensagens.consumidores(f, plano_lado):
+            for d in c.depends_on:
+                if (kind.get(d) == "entity" and d not in no_lote and d not in diretas
+                        and (raiz / d).is_file()):
+                    nome = Path(c.path).stem
+                    if nome not in usadas.setdefault(d, []):
+                        usadas[d].append(nome)
+    return "\n\n".join(
+        f"=== {d} === (entity used by {', '.join(cs)}, which consume this batch; "
+        f"public signatures without setters)\n"
+        f"{_sem_setters(assinaturas(d, (raiz / d).read_text(encoding='utf-8')))}"
+        for d, cs in usadas.items())
+
+
+def _sem_setters(texto: str) -> str:
+    """Os DTOs e eventos copiam campos da entidade pelos getters; os setters
+    dobravam o tamanho do bloco."""
+    return "\n".join(l for l in texto.splitlines()
+                     if not l.lstrip().startswith("public void set"))
+
+
+def _dependencias_diretas(raiz: Path, lote: List[PlannedFile], limite: int,
+                          so_assinaturas: bool) -> str:
     no_lote = {f.path for f in lote}
     partes, total = [], 0
     vistos: Set[str] = set()
@@ -98,8 +196,8 @@ def conteudo_dependencias(raiz: Path, lote: List[PlannedFile],
             texto = (raiz / d).read_text(encoding="utf-8")
             bloco = f"=== {d} ===\n{texto}"
             if so_assinaturas:
-                bloco = (f"=== {d} === (public signatures; read the file only if you "
-                         f"need the implementation)\n{assinaturas(d, texto)}")
+                bloco = (f"=== {d} === (public signatures, complete; read the file "
+                         f"only to see a method body)\n{assinaturas(d, texto)}")
             elif total + len(bloco) > limite:
                 bloco = (f"=== {d} === (só assinaturas públicas: limite de contexto)\n"
                          f"{assinaturas(d, texto)}")
@@ -187,8 +285,8 @@ def executar_lotes(
     for i, lote in enumerate(lotes, inicio + 1):
         total = inicio + len(lotes)
         print(f"  [{etapa}] lote {i}/{total}: {len(lote)} arquivo(s)", flush=True)
-        antes = copy.deepcopy(metricas.get(etapa, {}))   # tools_por_nome é mutado
-        deps = conteudo_dependencias(raiz, lote, so_assinaturas=sandbox is not None)
+        deps = conteudo_dependencias(raiz, lote, so_assinaturas=sandbox is not None,
+                                     plano_lado=arquivos)
         msg = montar_mensagem(lote, deps, i, total)
         k = conhecidos()
         coleta = None
@@ -196,12 +294,23 @@ def executar_lotes(
             coleta = ColetaSandbox(sandbox.host_dir, raiz, lote)
             msg += mensagens.msg_sandbox(lote, sandbox.caminho_no_container(raiz),
                                          getattr(agente, "ambiente", ""), raiz.name)
-        gerados, erros = executar_agente(
-            etapa, agente, msg, lambda g: validacao.validar_arquivos(g, lote, k),
-            metricas, max_tentativas, modulo=modulo,
-            normalizar=None if coleta else (lambda g: reparar_caminhos(g, lote)),
-            extrair=coleta,
-            limite_passos=LIMITE_PASSOS_SANDBOX if coleta else LIMITE_PASSOS_AGENTE)
+        # o carimbo separa execuções: um lote refeito numa nova execução não
+        # sobrescreve o histórico da anterior
+        carimbo = time.strftime("%Y%m%d-%H%M%S")
+        historico = (lambda t, r, i=i, c=carimbo: salvar_historico(
+            pasta / "historico" / f"{etapa}.lote{i:02d}.t{t}.{c}.json", r)) \
+            if SALVAR_HISTORICO else None
+        do_lote: dict = {}     # métricas só deste lote (manifesto e relatório)
+        try:
+            gerados, erros = executar_agente(
+                etapa, agente, msg, lambda g: validacao.validar_arquivos(g, lote, k),
+                do_lote, max_tentativas, modulo=modulo,
+                normalizar=None if coleta else (lambda g: reparar_caminhos(g, lote)),
+                extrair=coleta,
+                limite_passos=LIMITE_PASSOS_SANDBOX if coleta else LIMITE_PASSOS_AGENTE,
+                ao_invocar=historico)
+        finally:   # o gasto entra na etapa mesmo se o lote falhar
+            somar_metricas(metricas.setdefault(etapa, {}), do_lote.get(etapa, {}))
         if erros:
             if coleta:
                 coleta.desfazer()
@@ -218,20 +327,7 @@ def executar_lotes(
         if gerados.notes:
             manifesto.append({"lote": i, "notas": gerados.notes})
         metricas[etapa]["lotes"] = metricas[etapa].get("lotes", 0) + 1
-        depois = metricas[etapa]
-        delta = {c: round(depois.get(c, 0) - antes.get(c, 0), 2)
-                 for c in ("tentativas", "segundos") + CAMPOS_SOMADOS}
-        tools_antes = antes.get("tools_por_nome", {})
-        delta["tools_por_nome"] = {
-            n: q - tools_antes.get(n, 0)
-            for n, q in depois.get("tools_por_nome", {}).items() if q - tools_antes.get(n, 0)}
-        lidos_antes = antes.get("leituras", {})
-        delta["leituras"] = {
-            alvo: {"vezes": v["vezes"] - lidos_antes.get(alvo, {}).get("vezes", 0),
-                   "chars": v["chars"] - lidos_antes.get(alvo, {}).get("chars", 0)}
-            for alvo, v in depois.get("leituras", {}).items()
-            if v["vezes"] - lidos_antes.get(alvo, {}).get("vezes", 0)}
-        manifesto.append({"lote": i, "metricas": delta})
+        manifesto.append({"lote": i, "metricas": do_lote.get(etapa, {})})
         _salvar_json(progresso, manifesto)
         # a cada lote, para acompanhar o gasto durante a execução
         _salvar_json(pasta / "metricas.json", metricas)
@@ -370,15 +466,22 @@ def gravar_documentos(codigo_dir: Path, nome: str, agente,
     arquitetura, plano...) e devolve o bloco da mensagem que os aponta.
 
     No sandbox, a mensagem de cada lote leva só o recorte do que o lote usa; o
-    agente lê o documento inteiro com read_file se faltar algo. Os arquivos
-    ficam em <código>/.mas/<módulo>/ e existem antes da foto de cada lote, então
-    a ColetaSandbox não os apaga. Sem sandbox, devolve "" (mensagem completa).
+    agente busca no documento inteiro se faltar algo. Os arquivos ficam em
+    <código>/.mas/<módulo>/ e existem antes da foto de cada lote, então a
+    ColetaSandbox não os apaga. A versão antiga de um mesmo documento com outra
+    extensão (ex.: plano.json indentado, antes do plano.jsonl) é removida, para
+    o agente não achar as duas. Sem sandbox, devolve "" (mensagem completa).
     """
     sandbox = getattr(agente, "sandbox", None)
     if sandbox is None:
         return ""
     pasta = codigo_dir / ".mas" / layout.slugify(nome)
     pasta.mkdir(parents=True, exist_ok=True)
+    atuais = {Path(arquivo) for arquivo, conteudo in docs.values() if conteudo}
+    for antigo in pasta.iterdir():
+        if antigo.is_file() and any(antigo.stem == a.stem and antigo.name != a.name
+                                    for a in atuais):
+            antigo.unlink()
     caminhos = {}
     for descricao, (arquivo, conteudo) in docs.items():
         if conteudo:
@@ -428,10 +531,11 @@ def implementar_backend(
     externas = interfaces_externas(raiz, arq, lay.backend_prefixos)
     api_base = api_da_base(raiz, plano_base, "backend")
     tabelas = {e.table for e in modelo.entities}
+    jsonl = mensagens.documento_jsonl
     documentos = gravar_documentos(codigo_dir, nome, agente, {
-        "full final specification (JSON)": ("especificacao.json", spec.model_dump_json(indent=2)),
-        "full architecture (JSON)": ("arquitetura.json", arq.model_dump_json(indent=2)),
-        "full implementation plan of the module (JSON)": ("plano.json", plano.model_dump_json(indent=2)),
+        "full final specification": ("especificacao.jsonl", jsonl(spec)),
+        "full architecture": ("arquitetura.jsonl", jsonl(arq)),
+        "full implementation plan of the module": ("plano.jsonl", jsonl(plano)),
         "migration (DDL)": ("migracao.sql", ddl),
         "public signatures of all base backend files": ("api_base_backend.txt", api_base),
     })
@@ -459,10 +563,11 @@ def implementar_frontend(
     endpoints = {validacao.normalizar_rota(e.path) for e in arq.endpoints}
     endpoints |= {validacao.normalizar_rota(e) for e in endpoints_externos}
     api_base = api_da_base(raiz, plano_base, "frontend")
+    jsonl = mensagens.documento_jsonl
     documentos = gravar_documentos(codigo_dir, nome, agente, {
-        "full requirements and specification (JSON)": ("especificacao.json", spec.model_dump_json(indent=2)),
-        "full architecture with all API endpoints (JSON)": ("arquitetura.json", arq.model_dump_json(indent=2)),
-        "full implementation plan with all screens (JSON)": ("plano.json", plano.model_dump_json(indent=2)),
+        "full requirements and specification": ("especificacao.jsonl", jsonl(spec)),
+        "full architecture with all API endpoints": ("arquitetura.jsonl", jsonl(arq)),
+        "full implementation plan with all screens": ("plano.jsonl", jsonl(plano)),
         "public signatures of all base frontend files": ("api_base_frontend.txt", api_base),
     })
     manifesto = executar_lotes(

@@ -29,7 +29,8 @@ PARTE_DA_ETAPA = {
     "implementador_frontend_base": "frontend",
 }
 CAMPOS = ("input_tokens", "output_tokens", "segundos", "tentativas", "lotes",
-          "chamadas_modelo", "cache_read_tokens")
+          "chamadas_modelo", "cache_read_tokens", "reasoning_tokens",
+          "input_tokens_fora_do_historico", "output_tokens_fora_do_historico")
 
 
 def _vazio() -> Dict[str, float]:
@@ -107,27 +108,42 @@ def tokens(n: float) -> str:
     return str(n)
 
 
+def _ou_traco(n: float) -> str:
+    return tokens(n) if n else "—"
+
+
 def _celulas(m: dict) -> str:
-    return (f"{tokens(m['input_tokens'])} | {tokens(m['output_tokens'])} | "
+    return (f"{tokens(m['input_tokens'])} | {_ou_traco(m.get('cache_read_tokens', 0))} | "
+            f"{tokens(m['output_tokens'])} | {_ou_traco(m.get('reasoning_tokens', 0))} | "
             f"{tempo(m['segundos'])} | {int(m['tentativas'])} | {int(m['lotes']) or '—'} | "
             f"{int(m.get('chamadas_modelo', 0)) or '—'}")
 
 
 def render_metricas(cons: dict, titulo: str = "Métricas do projeto") -> str:
-    cab = "| Entrada | Saída | Tempo | Tentativas | Lotes | Chamadas ao modelo |"
-    sep = "|---|---|---|---|---|---|"
+    cab = ("| Entrada | Em cache | Saída | Raciocínio | Tempo | Tentativas | Lotes "
+           "| Chamadas ao modelo |")
+    sep = "|---|---|---|---|---|---|---|---|"
     out = [f"# {titulo}", "",
-           "Tokens de entrada e de saída somados de todas as chamadas aos agentes. "
+           "Tokens somados de todas as chamadas aos agentes. A entrada inclui a parte "
+           "lida do cache do provedor (Em cache, registrada desde o relato 9); a "
+           "entrada sem cache é a diferença. A saída inclui o raciocínio do modelo "
+           "(Raciocínio, registrado desde o relato 10). "
            "Tempo: dentro das chamadas (inclui build, testes e servidor no sandbox). "
            "Tentativas: chamadas ao agente (uma por lote quando passa de primeira). "
-           "Chamadas ao modelo: passos do agente, registrados desde o relato 9 "
-           "(\"—\" nas execuções anteriores).", "",
+           "Chamadas ao modelo: passos do agente, registrados desde o relato 9. "
+           "\"—\": não registrado nas execuções anteriores (ou zero).", "",
            "## Total", "", "| Parte " + cab, "|---" + sep]
     tot = cons["total"]
     for parte in PARTES:
         if parte in tot["partes"]:
             out.append(f"| {parte} | {_celulas(tot['partes'][parte])} |")
     out.append(f"| **Total** | {_celulas(tot['total'])} |")
+    t = tot["total"]
+    if t.get("input_tokens_fora_do_historico") or t.get("output_tokens_fora_do_historico"):
+        out += ["", "Fora do histórico do agente (subagentes, sumarização, chamadas "
+                "cortadas pelo limite de passos), já incluídos nos totais: "
+                f"{tokens(t['input_tokens_fora_do_historico'])} de entrada, "
+                f"{tokens(t['output_tokens_fora_do_historico'])} de saída."]
 
     out += ["", "## Por módulo", "", "| Módulo " + cab, "|---" + sep]
     for linha in cons["linhas"]:

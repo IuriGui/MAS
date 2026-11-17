@@ -70,8 +70,8 @@ def test_sandbox_gera_codigo_pelo_disco(tmp_path):
     res, codigo, ags = _rodar(tmp_path)
     assert (codigo / "backend" / MAIN / "domain/User.java").exists()
     assert (codigo / "frontend" / "src/main.tsx").exists()
-    assert res["metricas"]["implementador_backend"]["lotes"] == 2
-    msg = ags["implementador_backend"].chamadas[-1]
+    assert res["metricas"]["implementador_backend"]["lotes"] == 3
+    msg = ags["implementador_backend"].chamadas[-2]       # lote 2: serviço + controller
     assert "Side root: /workspace/backend" in msg
     assert f"/workspace/backend/{MAIN}/api/UserController.java" in msg
     assert "host 'db'" in msg

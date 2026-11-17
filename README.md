@@ -39,7 +39,11 @@ python -m pytest
 `--ate` define a última etapa (padrão: `implementador_frontend`); `--de` retoma a
 partir de uma etapa lendo do disco os artefatos anteriores.
 `VALIDAR=0` desliga a validação em código (útil para depurar prompts).
-`IMPL_LOTE` (padrão 5) define quantos arquivos cada chamada de Implementador gera.
+`IMPL_LOTE` (padrão 5) define quantos arquivos cada chamada de Implementador gera;
+`IMPL_LOTE_PESADO` (padrão 2), o máximo num lote com serviço, mapper, controller ou teste.
+`MOSTRAR_RACIOCINIO=1` pede ao Gemini os resumos do raciocínio, que vão para o histórico (só para diagnóstico: são reenviados em toda chamada e encarecem a entrada).
+`SALVAR_HISTORICO=0` deixa de gravar as mensagens de cada lote; `SANDBOX_SUBAGENTE=1`
+religa o subagente `task` do deepagents (desligado por padrão, ver `ALTERACOES.md`, relato 10).
 Todas as variáveis estão em `.env.example` e `mas/config.py`.
 
 **Sandbox:** as etapas de implementação precisam do Docker e da imagem
@@ -64,7 +68,9 @@ O `metricas.json` de cada pasta é gravado a cada lote, e o `relatorio.md` mostr
 gasto e o relato do agente de cada lote.
 Saída de cada módulo: `1_analise.json`, `2_especificacao.json`,
 `3_modelo_dados.json`, `4_arquitetura.json`, `5_plano.json`, `6_backend.json` e
-`7_frontend.json` (arquivos gerados), `relatorio.md` e `metricas.json`.
+`7_frontend.json` (arquivos gerados), `relatorio.md`, `metricas.json` (tokens de entrada,
+em cache, de saída e de raciocínio) e `historico/` (as mensagens de cada tentativa de cada
+lote: o que o agente leu, rodou e escreveu).
 Rodando um módulo sozinho, a base e o código ficam em `saida/<modulo>/base` e `saida/<modulo>/codigo`.
 
 ## Entradas

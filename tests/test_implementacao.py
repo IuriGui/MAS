@@ -373,13 +373,14 @@ def test_pipeline_gera_codigo(tmp_path):
     manifesto = json.loads((pasta / "6_backend.json").read_text())
     assert manifesto[0]["gerado_por"] == "ddl.py"
     assert "Plano de implementação" in (pasta / "relatorio.md").read_text()
-    assert res["metricas"]["implementador_backend"]["lotes"] == 2
+    # 4 leves; serviço + controller (pesados: no máximo 2 por lote); teste
+    assert res["metricas"]["implementador_backend"]["lotes"] == 3
 
-    # o planejador recebe a DDL; o 2º lote recebe o código de que depende
+    # o planejador recebe a DDL; o último lote recebe o código de que depende
     assert "CREATE TABLE users" in ags["planejador"].chamadas[-1]
-    lote2 = ags["implementador_backend"].chamadas[-1]
-    assert "batch 2/2" in lote2
-    assert f"=== {MAIN}/service/UserService.java ===" in lote2
+    lote3 = ags["implementador_backend"].chamadas[-1]
+    assert "batch 3/3" in lote3
+    assert f"=== {MAIN}/service/UserService.java ===" in lote3
 
 
 def test_implementador_retry(tmp_path):
@@ -512,7 +513,7 @@ def test_reparo_saida_real_do_gemini():
     """Lote 6 da base na 1ª execução real: o Gemini escreveu OutboxPublisher com o
     path de OutboxProcessorService (duplicado) e deixou OutboxPublisher faltando."""
     p = ImplementationPlan.model_validate_json((DADOS / "plano_base_real.json").read_text())
-    lote = implementacao.montar_lotes(p.backend_files)[5]
+    lote = implementacao.montar_lotes(p.backend_files, 5, 5)[5]  # lotes da época
     g = GeneratedFiles.model_validate_json((DADOS / "lote_caminho_trocado.json").read_text())
     k = validacao.Conhecidos(caminhos={f.path for f in p.backend_files},
                               pacote_base="com.distributor.erp.")
@@ -568,25 +569,25 @@ def test_retomada_gera_so_o_que_falta(tmp_path):
         arqs.pop()
     # lote 2 do módulo falha sempre na 1ª execução
     ruim = implementador_falso(sabotar=estraga, vezes=99,
-                               quando=lambda m: "MODE: MODULE" in m and "batch 2/2" in m)
+                               quando=lambda m: "MODE: MODULE" in m and "batch 2/3" in m)
     with pytest.raises(PipelineError):
         processar_modulo("Usuários", "d", agentes=agentes(back=ruim),
                          saida_dir=str(tmp_path), max_tentativas=2)
     pasta = tmp_path / "usuarios"
     progresso = pasta / "implementador_backend.progresso.json"
     feitos = [m["path"] for m in json.loads(progresso.read_text()) if "path" in m]
-    assert len(feitos) == 5  # lote 1 (a migration é regenerada em código)
+    assert len(feitos) == 4  # lote 1 (a migration é regenerada em código)
 
     bom = implementador_falso()
     res = processar_modulo("Usuários", "d", de="planejador", agentes=agentes(back=bom),
                            saida_dir=str(tmp_path))
     # 2ª execução: o planejador refaz o plano (igual), mas só o lote pendente é gerado
     modulo = [c for c in bom.chamadas if "MODE: MODULE" in c]
-    # a numeração continua a da 1ª execução (lote 2 de 2), sem repetir o lote 1
-    assert len(modulo) == 1 and "batch 2/2" in modulo[0]
+    # a numeração continua a da 1ª execução (lotes 2 e 3 de 3), sem repetir o lote 1
+    assert len(modulo) == 2 and "batch 2/3" in modulo[0] and "batch 3/3" in modulo[1]
     pedidos_2 = {f["path"] for f in json.loads(modulo[0].split("(JSON):\n")[-1])}
-    assert pedidos_2 == {f"{MAIN}/api/UserController.java",
-                         f"src/test/java/{PKG}/service/UserServiceTest.java"}
+    assert pedidos_2 == {f"{MAIN}/service/UserService.java",
+                         f"{MAIN}/api/UserController.java"}
     assert not progresso.exists()
     gerados = {m["path"] for m in res["arquivos_backend"] if "path" in m}
     assert f"{MAIN}/domain/User.java" in gerados and f"{MAIN}/api/UserController.java" in gerados
@@ -954,9 +955,10 @@ def test_sandbox_grava_documentos_e_mede_passos(tmp_path):
     res = processar_modulo("Usuários", "d", agentes=agentes(back=back, front=sandbox_falso(codigo)),
                            saida_dir=str(tmp_path))
     docs = codigo / ".mas" / "usuarios"
-    assert (docs / "especificacao.json").exists() and (docs / "plano.json").exists()
+    assert (docs / "especificacao.jsonl").exists() and (docs / "plano.jsonl").exists()
+    assert (docs / "migracao.sql").exists()          # o frontend não apaga os do backend
     msg = back.chamadas[-1]
-    assert "FULL DOCUMENTS" in msg and "/workspace/.mas/usuarios/plano.json" in msg
+    assert "FULL DOCUMENTS" in msg and "/workspace/.mas/usuarios/plano.jsonl" in msg
     assert "VERIFY:" in msg
     assert res["metricas"]["implementador_backend"]["chamadas_modelo"] == 0  # grafo falso
 
@@ -970,7 +972,7 @@ def test_lotes_por_execucao_para_e_retoma(tmp_path, monkeypatch):
     monkeypatch.setattr(implementacao, "LOTES_POR_EXECUCAO", 0)
     res = processar_modulo("Usuários", "d", de="implementador_backend", agentes=agentes(),
                            saida_dir=str(tmp_path))
-    assert res["metricas"]["implementador_backend"]["lotes"] == 2
+    assert res["metricas"]["implementador_backend"]["lotes"] == 3
 
 
 def test_agente_sandbox_guarda_estado_ao_estourar_passos():
@@ -1001,7 +1003,7 @@ def test_metricas_por_lote_separam_ferramentas_de_cada_lote(tmp_path, monkeypatc
     processar_modulo("Usuários", "d", agentes=agentes(), saida_dir=str(tmp_path))
     man = json.loads((tmp_path / "usuarios" / "6_backend.json").read_text())
     por_lote = [m["metricas"]["tools_por_nome"] for m in man if "metricas" in m]
-    assert por_lote == [{"read_file": 1}, {"read_file": 1}]
+    assert por_lote == [{"read_file": 1}] * 3
 
 
 def test_registra_arquivos_lidos_e_comandos():

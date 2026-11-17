@@ -196,6 +196,10 @@ def ler_manifestos(pasta: Path) -> Dict[str, List[dict]]:
             for chave, arq in MANIFESTOS.items() if (pasta / arq).exists()}
 
 
+def _milhar(n) -> str:
+    return f"{int(n):,}".replace(",", ".")
+
+
 def _citacao(texto: str) -> str:
     return "\n".join(f"> {linha}".rstrip() for linha in texto.strip().splitlines())
 
@@ -243,17 +247,28 @@ def render_arquivos(titulo: str, manifesto: List[dict]) -> str:
                 gasto += (f" {int(mt['chamadas_modelo'])} chamadas ao modelo; "
                           f"{int(mt.get('chamadas_tool', 0))} de ferramentas"
                           f"{' (' + ferramentas + ')' if ferramentas else ''}; "
-                          f"saída das ferramentas: {int(mt.get('saida_tool_chars', 0)):,} "
-                          f"caracteres".replace(",", "."))
+                          f"saída das ferramentas: {_milhar(mt.get('saida_tool_chars', 0))} "
+                          f"caracteres")
+                if mt.get("maior_saida_tool"):
+                    gasto += f" (a maior: {_milhar(mt['maior_saida_tool'])})"
                 if mt.get("cache_read_tokens"):
-                    gasto += f"; em cache: {tokens(mt['cache_read_tokens'])}"
+                    gasto += (f"; entrada em cache: {tokens(mt['cache_read_tokens'])}, "
+                              f"sem cache: "
+                              f"{tokens(mt['input_tokens'] - mt['cache_read_tokens'])}")
+                if mt.get("reasoning_tokens"):
+                    gasto += f"; raciocínio (na saída): {tokens(mt['reasoning_tokens'])}"
+                fora = (mt.get("input_tokens_fora_do_historico", 0),
+                        mt.get("output_tokens_fora_do_historico", 0))
+                if any(fora):
+                    gasto += (f"; fora do histórico do agente: {tokens(fora[0])} de "
+                              f"entrada, {tokens(fora[1])} de saída")
                 gasto += "."
                 lidos = sorted((mt.get("leituras") or {}).items(),
                                key=lambda x: (-x[1]["chars"], -x[1]["vezes"]))
                 if lidos:
                     gasto += ("\n\nO que o agente leu ou rodou (maiores saídas primeiro):\n"
                               + "\n".join(f"- `{alvo}`: {v['vezes']}×, "
-                                           f"{v['chars']:,} caracteres".replace(",", ".")
+                                           f"{_milhar(v['chars'])} caracteres"
                                            for alvo, v in lidos[:15]))
                     if len(lidos) > 15:
                         gasto += f"\n- … mais {len(lidos) - 15}"

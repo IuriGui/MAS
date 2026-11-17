@@ -7,12 +7,28 @@ projeto não exige editar este arquivo.
 from mas.schemas import ProjectContext
 
 
-def com_contexto(contexto: ProjectContext, regras: str) -> str:
-    """Prefixa as regras do agente com o PROJECT CONTEXT do projeto."""
-    return (
-        "PROJECT CONTEXT (global decisions every module must follow)\n"
-        f"{contexto.model_dump_json(indent=2)}\n\n{regras}"
-    )
+# Partes do PROJECT CONTEXT que afetam o código de um lote. Ficam de fora
+# module_map, build_order, decisions (ADRs), risks e assumptions (~57% do
+# contexto): as decisões que valem para o código já estão em tech_stack e
+# cross_cutting_decisions, e o que o lote precisa dos outros módulos vem na
+# mensagem. O system prompt é reenviado a cada passo do agente (relato 10).
+CAMPOS_CONTEXTO_IMPLEMENTADOR = {"context_version", "architectural_style", "tech_stack",
+                                 "cross_cutting_decisions", "naming_conventions",
+                                 "inter_module_communication"}
+
+
+def com_contexto(contexto: ProjectContext, regras: str, enxuto: bool = False) -> str:
+    """Prefixa as regras do agente com o PROJECT CONTEXT do projeto.
+
+    `enxuto` (Implementadores): só as partes que afetam o código."""
+    if enxuto:
+        dados = contexto.model_dump_json(indent=2, include=CAMPOS_CONTEXTO_IMPLEMENTADOR)
+        titulo = ("PROJECT CONTEXT (global decisions every module must follow; the parts "
+                  "that affect the code)")
+    else:
+        dados = contexto.model_dump_json(indent=2)
+        titulo = "PROJECT CONTEXT (global decisions every module must follow)"
+    return f"{titulo}\n{dados}\n\n{regras}"
 
 
 ARQUITETO_CHEFE = """\
@@ -402,15 +418,32 @@ SANDBOX MODE (you work inside a Docker container with JDK, Maven, Node/npm, curl
 - The project code is mounted at /workspace: backend at /workspace/backend and
   frontend at /workspace/frontend. The files you write there ARE the deliverable.
 - Write each file of the batch with write_file at the absolute path given in the
-  message; fix it with edit_file. Read any existing file with read_file/grep
-  instead of guessing its API.
+  message; fix it with edit_file.
+- Work file by file: as soon as you have what a file needs, write it, then move
+  to the next one. Do not read for the whole batch before writing the first file.
+- Every response resends the whole conversation, so:
+  * request independent reads and searches together, in the SAME response
+    (several tool calls at once), never one per response;
+  * read a source file whole in one call (read_file with limit=500), not in
+    100-line pages;
+  * the public signatures in the message are complete (Lombok-generated members
+    included): use them as they are. Read a file only to see the body of a
+    method you must reuse, never just to confirm its API or to copy the style
+    of a similar file.
 - The message carries only what this batch needs: the requirements and the
-  parts of the architecture it implements, the other files of the module (one
-  line each) and the files it depends on as public signatures (each method with
-  a one-line description when it has a doc comment). That is usually enough;
-  the full documents (specification, architecture, plan, migration, base API)
-  are at the paths listed in the message: read them with read_file only when
-  something you need is missing.
+  parts of the architecture it implements (including the endpoints whose
+  request or response uses a DTO of the batch), the other files of the module
+  (one line each), who uses each file of the batch, and the files it depends on
+  as public signatures (each method with a one-line description when it has a
+  doc comment; for DTOs and events, also the entities their consumers map).
+  That is usually enough. The full documents (specification, architecture,
+  plan, migration, base API) are at the paths listed in the message, only for
+  when something you need is missing: the .jsonl ones have one entry per line,
+  so grep a path, class name or requirement ID with output_mode "content" in
+  the ONE document that has it (plan: files; architecture: endpoints,
+  services, events; specification: requirements) to get the whole entry.
+  Never read_file a .jsonl document, and do not grep the whole folder: a class
+  name appears in many entries.
 - Do NOT create, modify or delete files outside the batch: those changes are
   discarded automatically. If a file outside the batch is wrong, report it in
   your final message.

@@ -20,3 +20,6 @@ sistemas.zip
 
 # backups locais das execuções
 backup_*.tar.gz
+
+# notas locais sobre redução de tokens (opções ainda não aplicadas)
+reducao de tokens/

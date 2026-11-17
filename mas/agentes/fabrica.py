@@ -13,8 +13,8 @@ from langchain.agents import create_agent
 from langchain.chat_models import init_chat_model
 
 from mas.agentes import prompts
-from mas.config import (MAX_RETRIES_API, MODEL, SANDBOX, SANDBOX_IMAGEM,
-                        SANDBOX_PORTAS, TIMEOUT_API)
+from mas.config import (MAX_RETRIES_API, MODEL, MOSTRAR_RACIOCINIO, SANDBOX,
+                        SANDBOX_IMAGEM, SANDBOX_PORTAS, SANDBOX_SUBAGENTE, TIMEOUT_API)
 from mas.schemas import (FinalSpecification, GeneratedFiles, ImplementationPlan,
                          ModuleAnalysis, ModuleArchitecture, ModuleDataModel,
                          ProjectContext)
@@ -32,8 +32,20 @@ AGENTES_DE_MODULO = {
 IMPLEMENTADORES = ("implementador_backend", "implementador_frontend")
 
 
-def _modelo():
-    return init_chat_model(MODEL, max_retries=MAX_RETRIES_API, timeout=TIMEOUT_API)
+def _modelo(**extra):
+    return init_chat_model(MODEL, max_retries=MAX_RETRIES_API, timeout=TIMEOUT_API, **extra)
+
+
+def _eh_gemini() -> bool:
+    provedor = MODEL.split(":", 1)[0] if ":" in MODEL else ""
+    return provedor in ("google_genai", "google_vertexai") or (
+        not provedor and MODEL.startswith("gemini"))
+
+
+def _opcoes_sandbox() -> dict:
+    """Parâmetros do modelo dos Implementadores no sandbox: resumos do
+    raciocínio no histórico (só Gemini; outros provedores não aceitam o nome)."""
+    return {"include_thoughts": True} if MOSTRAR_RACIOCINIO and _eh_gemini() else {}
 
 
 def criar_agente_estruturado(system_prompt: str, response_format):
@@ -52,17 +64,20 @@ def criar_arquiteto_chefe():
 
 
 @lru_cache(maxsize=16)
-def _agente_cache(regras: str, response_format, contexto_json: str):
+def _agente_cache(regras: str, response_format, contexto_json: str, enxuto: bool = False):
     contexto = ProjectContext.model_validate_json(contexto_json)
-    return criar_agente_estruturado(prompts.com_contexto(contexto, regras), response_format)
+    return criar_agente_estruturado(prompts.com_contexto(contexto, regras, enxuto),
+                                    response_format)
 
 
-def criar_agente_de_modulo(regras: str, response_format, contexto: ProjectContext):
-    """Agente de módulo: regras + PROJECT CONTEXT do projeto no system prompt.
+def criar_agente_de_modulo(regras: str, response_format, contexto: ProjectContext,
+                           enxuto: bool = False):
+    """Agente de módulo: regras + PROJECT CONTEXT do projeto no system prompt
+    (`enxuto`: só as partes que afetam o código, para os Implementadores).
 
     Reaproveita o agente enquanto o contexto for o mesmo.
     """
-    return _agente_cache(regras, response_format, contexto.model_dump_json())
+    return _agente_cache(regras, response_format, contexto.model_dump_json(), enxuto)
 
 
 def criar_agentes(contexto: ProjectContext, ambiente=None) -> dict:
@@ -76,7 +91,7 @@ def criar_agentes(contexto: ProjectContext, ambiente=None) -> dict:
 
 def criar_implementadores(contexto: ProjectContext, ambiente=None) -> dict:
     if ambiente is None:
-        return {e: criar_agente_de_modulo(*AGENTES_DE_MODULO[e], contexto)
+        return {e: criar_agente_de_modulo(*AGENTES_DE_MODULO[e], contexto, enxuto=True)
                 for e in IMPLEMENTADORES}
     return {e: criar_agente_sandbox(prompts.regras_sandbox(AGENTES_DE_MODULO[e][0]),
                                     contexto, ambiente.sandbox, ambiente.descricao())
@@ -114,13 +129,49 @@ class AgenteSandbox:
         return ultimo
 
 
+def _provedor(modelo) -> str:
+    """Provedor do modelo, como o deepagents o usa para escolher o HarnessProfile."""
+    try:
+        from deepagents._models import get_model_provider
+        provedor = get_model_provider(modelo)
+        if provedor:
+            return provedor
+    except ImportError:
+        pass
+    return MODEL.split(":", 1)[0] if ":" in MODEL else ""
+
+
+def desligar_subagente(modelo) -> bool:
+    """Tira o subagente general-purpose (ferramenta `task`) que o
+    create_deep_agent adiciona sozinho.
+
+    Ele nunca apareceu nos lotes medidos, a descrição da ferramenta (~2 mil
+    caracteres) ia em toda chamada ao modelo, e as chamadas dele não ficam no
+    estado do agente pai (relato 10). O deepagents só permite desligá-lo pelo
+    HarnessProfile do provedor; o registro vale para o processo inteiro e é
+    idempotente (registrar de novo mescla com o que já existe).
+    """
+    from deepagents import (GeneralPurposeSubagentProfile, HarnessProfile,
+                            register_harness_profile)
+    provedor = _provedor(modelo)
+    if not provedor:
+        print("  AVISO: provedor do modelo desconhecido; subagente `task` continua ligado")
+        return False
+    register_harness_profile(provedor, HarnessProfile(
+        general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False)))
+    return True
+
+
 def criar_agente_sandbox(regras: str, contexto: ProjectContext, sandbox,
                          ambiente: str = "") -> AgenteSandbox:
     from deepagents import create_deep_agent
 
+    modelo = _modelo(**_opcoes_sandbox())
+    if not SANDBOX_SUBAGENTE:
+        desligar_subagente(modelo)
     grafo = create_deep_agent(
-        model=_modelo(),
-        system_prompt=prompts.com_contexto(contexto, regras),
+        model=modelo,
+        system_prompt=prompts.com_contexto(contexto, regras, enxuto=True),
         backend=sandbox,
     )
     return AgenteSandbox(grafo, sandbox, ambiente)

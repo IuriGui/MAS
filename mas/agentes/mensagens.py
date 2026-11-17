@@ -5,7 +5,10 @@ is provided here. Previously, the {{...}} placeholders were inside the system
 prompt and were never replaced.
 """
 import json
+import re
 from typing import Dict, List, Optional, Tuple
+
+from pydantic import BaseModel
 
 from mas.codigo.layout import PREFIXO_MIGRACAO_BASE, Layout
 from mas.schemas import (FinalSpecification, ImplementationPlan, ModuleAnalysis,
@@ -166,6 +169,54 @@ def _simples(nome: str) -> str:
     return nome.split(".")[-1].split("(")[0].strip()
 
 
+# Tipos de arquivo cujos exports aparecem no request/response dos endpoints
+KINDS_DE_PAYLOAD = {"dto", "types"}
+
+
+def _payloads(lote: List[PlannedFile]) -> set:
+    """Nomes exportados pelos DTOs (backend) e tipos (frontend) do lote."""
+    return {_simples(x) for f in lote if f.kind in KINDS_DE_PAYLOAD for x in f.exports
+            if len(_simples(x)) >= 4}
+
+
+def _usa_payload(e, nomes: set) -> bool:
+    """O request ou o response do endpoint cita um dos nomes (palavra inteira)."""
+    texto = f"{e.request_summary} {e.response_summary}"
+    return any(re.search(rf"\b{re.escape(n)}\b", texto) for n in nomes)
+
+
+def _endpoints_do_lote(arq: ModuleArchitecture, lote: List[PlannedFile]) -> list:
+    """Endpoints citados pelos arquivos do lote e, para DTOs e tipos, os que os
+    usam no request ou response (o agente buscava esses endpoints no documento
+    da arquitetura; relato 9, lotes 7 e 8)."""
+    citadas, nomes = _rotas_citadas(lote), _payloads(lote)
+    return [e for e in arq.endpoints
+            if _endpoint_citado(e, citadas) or (nomes and _usa_payload(e, nomes))]
+
+
+def consumidores(f: PlannedFile, plano_lado: List[PlannedFile]) -> List[PlannedFile]:
+    """Arquivos do plano que importam `f` (depends_on)."""
+    return [c for c in plano_lado if f.path in c.depends_on and c.path != f.path]
+
+
+# Arquivos cujos consumidores o agente procurava no plano (relato 9: "quem usa
+# os DTOs do lote"). Em lote de entidade a lista chegava a 9 mil caracteres por
+# passo sem evidência de uso, por isso fica restrita a estes tipos.
+KINDS_COM_USADO_POR = {"dto", "event", "types"}
+
+
+def usado_por(plano_lado: List[PlannedFile], lote: List[PlannedFile]) -> str:
+    """Quem usa cada DTO, evento ou tipo do lote: os consumidores planejados,
+    quase sempre gerados em lotes seguintes (o agente os procurava com grep)."""
+    linhas = []
+    for f in lote:
+        cs = consumidores(f, plano_lado) if f.kind in KINDS_COM_USADO_POR else []
+        if cs:
+            linhas.append(f"- {f.path} is used by:")
+            linhas += [f"  - {c.path} [{c.kind}]: {c.purpose[:160]}" for c in cs]
+    return "\n".join(linhas) or NO_FILES
+
+
 def recorte_especificacao(spec: FinalSpecification, lote: List[PlannedFile]) -> str:
     """Escopo, requisitos citados pelos arquivos do lote e as decisões que os afetam."""
     citados = _reqs_citados(lote)
@@ -183,13 +234,13 @@ def recorte_especificacao(spec: FinalSpecification, lote: List[PlannedFile]) -> 
 
 def recorte_arquitetura(arq: ModuleArchitecture, lote: List[PlannedFile]) -> str:
     """Só as partes da arquitetura que os arquivos do lote implementam ou usam."""
-    kinds, citadas = _kinds(lote), _rotas_citadas(lote)
+    kinds = _kinds(lote)
     exports = {_simples(x) for f in lote for x in f.exports}
     citados = _reqs_citados(lote)
     parte: Dict[str, object] = {"module_name": arq.module_name,
                                 "java_package": arq.java_package,
                                 "package_structure": arq.package_structure}
-    endpoints = [e.model_dump() for e in arq.endpoints if _endpoint_citado(e, citadas)]
+    endpoints = [e.model_dump() for e in _endpoints_do_lote(arq, lote)]
     if endpoints:
         parte["endpoints"] = endpoints
     servicos = [s.model_dump() for s in arq.public_services
@@ -296,7 +347,9 @@ def msg_implementador_backend(
             f"OTHER FILES OF THE MODULE (path [kind]: exports):\n"
             f"{resumo_plano(plano.backend_files, lote)}\n"
             f"Implementation notes:\n" + "\n".join(f"- {x}" for x in plano.implementation_notes)
-            + f"\n\nBASE:\n{resumo_base(plano_base, 'backend')}\n\n"
+            + f"\n\nWHO USES THE FILES OF THIS BATCH (planned consumers, usually "
+            f"generated in later batches):\n{usado_por(plano.backend_files, lote)}\n\n"
+            f"BASE:\n{resumo_base(plano_base, 'backend')}\n\n"
             f"OTHER MODULES' PUBLIC CODE:\n{externas or NO_FILES}\n\n"
             f"FILES THIS BATCH DEPENDS ON (public signatures; base files included):\n"
             f"{dependencias or NO_FILES}\n\n"
@@ -334,13 +387,12 @@ def msg_implementador_frontend(
 ) -> str:
     """Mensagem de um lote do frontend. Com `documentos` (sandbox), só o recorte."""
     if documentos:
-        citados, rotas = _reqs_citados(lote), _rotas_citadas(lote)
+        citados = _reqs_citados(lote)
         no_lote = {f.path for f in lote}
         reqs = [r.model_dump() for r in
                 list(especificacao.functional_requirements)
                 + list(especificacao.non_functional_requirements) if r.id in citados]
-        endpoints = [e.model_dump() for e in arquitetura.endpoints
-                     if _endpoint_citado(e, rotas)]
+        endpoints = [e.model_dump() for e in _endpoints_do_lote(arquitetura, lote)]
         telas = [s.model_dump() for s in plano.screens
                  if s.page_file in no_lote or "routes" in _kinds(lote)]
         return (
@@ -352,6 +404,8 @@ def msg_implementador_frontend(
             f"SCREENS OF THIS BATCH (JSON):\n{json.dumps(telas, indent=2, ensure_ascii=False)}\n\n"
             f"OTHER FILES OF THE MODULE (path [kind]: exports):\n"
             f"{resumo_plano(plano.frontend_files, lote)}\n\n"
+            f"WHO USES THE FILES OF THIS BATCH (planned consumers, usually "
+            f"generated in later batches):\n{usado_por(plano.frontend_files, lote)}\n\n"
             f"BASE:\n{resumo_base(plano_base, 'frontend')}\n\n"
             f"FILES THIS BATCH DEPENDS ON (public signatures; base files included):\n"
             f"{dependencias or NO_FILES}\n\n"
@@ -430,11 +484,33 @@ def verificacao_do_lote(lote: List[PlannedFile], raiz_container: str, lado: str)
     return f"VERIFY: {cmd}\n{teste}"
 
 
+def documento_jsonl(obj: BaseModel) -> str:
+    """Documento em JSON Lines: um item por linha, com a seção de origem.
+
+    Antes ia como JSON indentado (o plano do Customers tinha 1.726 linhas):
+    read_file lê 100 linhas por vez e um grep devolvia só a linha que casou
+    (`"path": ...`), sem o resto do item, e o agente lia de novo para completar
+    (relato 9). Com um item por linha, grep com output_mode "content" devolve o
+    item inteiro.
+    """
+    linhas = []
+    for campo, valor in obj.model_dump().items():
+        if isinstance(valor, list) and valor:
+            linhas += [{"section": campo, **item} if isinstance(item, dict)
+                       else {"section": campo, "value": item} for item in valor]
+        else:
+            linhas.append({"section": campo, "value": valor})
+    return "\n".join(json.dumps(l, ensure_ascii=False) for l in linhas) + "\n"
+
+
 def documentos_do_modulo(caminhos: Dict[str, str]) -> str:
     """Bloco com os documentos inteiros gravados no sandbox (lidos só se preciso)."""
     if not caminhos:
         return ""
-    return ("FULL DOCUMENTS (read with read_file only if this message is not enough):\n"
+    return ("FULL DOCUMENTS (only if this message is not enough; the .jsonl files have "
+            "one entry per line: grep a path, class name or requirement ID with "
+            "output_mode \"content\" in the one document that has it; never read_file "
+            "them whole):\n"
             + "\n".join(f"- {c} — {d}" for d, c in caminhos.items()))
 
 
