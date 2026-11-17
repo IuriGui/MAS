@@ -13,6 +13,7 @@
   workspace do container e compila/testa lá; o pipeline colhe o lote do disco
   (codigo/coleta.py), repara caminhos, descarta mudanças fora do lote e valida.
 """
+import copy
 import json
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Set
@@ -186,7 +187,7 @@ def executar_lotes(
     for i, lote in enumerate(lotes, inicio + 1):
         total = inicio + len(lotes)
         print(f"  [{etapa}] lote {i}/{total}: {len(lote)} arquivo(s)", flush=True)
-        antes = dict(metricas.get(etapa, {}))
+        antes = copy.deepcopy(metricas.get(etapa, {}))   # tools_por_nome é mutado
         deps = conteudo_dependencias(raiz, lote, so_assinaturas=sandbox is not None)
         msg = montar_mensagem(lote, deps, i, total)
         k = conhecidos()
@@ -224,6 +225,12 @@ def executar_lotes(
         delta["tools_por_nome"] = {
             n: q - tools_antes.get(n, 0)
             for n, q in depois.get("tools_por_nome", {}).items() if q - tools_antes.get(n, 0)}
+        lidos_antes = antes.get("leituras", {})
+        delta["leituras"] = {
+            alvo: {"vezes": v["vezes"] - lidos_antes.get(alvo, {}).get("vezes", 0),
+                   "chars": v["chars"] - lidos_antes.get(alvo, {}).get("chars", 0)}
+            for alvo, v in depois.get("leituras", {}).items()
+            if v["vezes"] - lidos_antes.get(alvo, {}).get("vezes", 0)}
         manifesto.append({"lote": i, "metricas": delta})
         _salvar_json(progresso, manifesto)
         # a cada lote, para acompanhar o gasto durante a execução

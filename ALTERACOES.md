@@ -138,7 +138,64 @@ Testes: 6 novos (123 no total).
 
 ### Resultado com LLM
 
-(a preencher com os lotes 4 a 6 do backend do Customers)
+Lotes 4 a 6 do backend do Customers, em 17/11/2026, com
+`LOTES_POR_EXECUCAO=3`. Os três foram aprovados de primeira.
+
+| Lote | Conteúdo | Entrada | Em cache | Saída | Chamadas ao modelo | Tempo |
+|---|---|---|---|---|---|---|
+| 1* | 5 enums | 0,76 mi | ? | 2,8 mil | ? | 1,5 min |
+| 2* | 3 entidades + validador | 3,58 mi | ? | 31 mil | ? | 6,8 min |
+| 3* | 5 eventos | 1,16 mi | ? | 15 mil | ? | 2,7 min |
+| 4 | 3 eventos + 2 repositórios | 1,47 mi | 1,35 mi (92%) | 19 mil | 39 | 4,1 min |
+| 5 | 1 repositório + 4 DTOs | 1,14 mi | 1,03 mi (90%) | 13 mil | 35 | 3,0 min |
+| 6 | 2 DTOs + 3 interfaces públicas | 2,01 mi | 1,86 mi (93%) | 16 mil | 48 | 4,9 min |
+
+\* Antes deste relato, com a mensagem inteira e sem medição de passos e cache.
+
+**Média por lote:** 1,83 mi (lotes 1–3) → 1,54 mi (lotes 4–6), **16% a
+menos**. A comparação é aproximada: os lotes têm conteúdos diferentes, e o
+lote 2 pesa muito na média antiga.
+
+**O que funcionou:**
+- **B1:** o agente rodou só `mvn -q compile` (e `test-compile`), sem a suíte e
+  sem subir a aplicação. Foram 3 `execute` por lote.
+- **B2:** os comandos saíram com `| tail -n 40`.
+
+**O que comeu a economia: leituras.** Nos três lotes, as 119 chamadas de
+ferramenta foram:
+
+| `read_file` | `grep` | `glob` | `write_file` | `execute` | `ls` |
+|---|---|---|---|---|---|
+| 54 | 25 | 15 | 15 | 9 | 1 |
+
+São 18 leituras por lote para 5 arquivos escritos. As saídas das ferramentas
+somaram 246 mil caracteres (a maior, 20,5 mil), e cada uma fica no histórico e
+é reenviada nos passos seguintes. Com a parte fixa em ~18 mil tokens, a média
+de ~37 mil tokens por chamada mostra que o histórico virou a maior parte do
+contexto. A medição não registra quais arquivos foram lidos, então não se
+sabe se foram os documentos de `.mas/` (a especificação inteira tem 40 mil
+caracteres) ou o código já gerado, para seguir o padrão.
+
+**Cache:** 91–93% da entrada veio do cache do provedor, ou seja, do começo
+repetido da conversa. Se o cache tiver desconto, o custo em reais é bem menor
+do que o total de tokens indica. O desconto do `gemini-3.8-flash` não foi
+verificado.
+
+**Registro do que o agente lê** (feito depois desta execução,
+`execucao._alvo`): cada chamada de `read_file` (caminho, e o trecho quando há
+`offset`), `grep`, `glob` (padrão e pasta), `ls` e `execute` (o comando) é
+registrada com o número de vezes e os caracteres devolvidos. Os números ficam
+em `leituras`, na etapa (`metricas.json`) e em cada lote (manifesto). O
+`relatorio.md` lista, por lote, as 15 maiores. Escritas ficam de fora, porque
+o conteúdo escrito já conta como saída do modelo. Só vale para as próximas
+execuções: o histórico dos lotes 4–6 não foi guardado.
+
+**Próximos passos possíveis:**
+1. Rodar 2 ou 3 lotes com o registro, para saber o que o agente procura.
+2. Pôr na mensagem um exemplo curto de um arquivo do mesmo tipo já gerado,
+   para evitar a exploração.
+3. Limpar do histórico as saídas antigas de ferramentas (C1).
+4. Lotes simples (DTO, evento, enum, interface) sem sandbox (E1).
 
 ---
 

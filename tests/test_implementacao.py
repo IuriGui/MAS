@@ -989,3 +989,40 @@ def test_agente_sandbox_guarda_estado_ao_estourar_passos():
 
     r = AgenteSandbox(Grafo(), None).invoke({"messages": []})
     assert r["limite_passos"] and _tokens(r)["input_tokens"] == 100
+
+
+def test_metricas_por_lote_separam_ferramentas_de_cada_lote(tmp_path, monkeypatch):
+    from mas.pipeline import execucao
+    def tokens_falsos(resultado):
+        return {"input_tokens": 10, "output_tokens": 1, "cache_read_tokens": 0,
+                "chamadas_modelo": 2, "chamadas_tool": 1, "saida_tool_chars": 5,
+                "maior_saida_tool": 5, "tools_por_nome": {"read_file": 1}}
+    monkeypatch.setattr(execucao, "_tokens", tokens_falsos)
+    processar_modulo("Usuários", "d", agentes=agentes(), saida_dir=str(tmp_path))
+    man = json.loads((tmp_path / "usuarios" / "6_backend.json").read_text())
+    por_lote = [m["metricas"]["tools_por_nome"] for m in man if "metricas" in m]
+    assert por_lote == [{"read_file": 1}, {"read_file": 1}]
+
+
+def test_registra_arquivos_lidos_e_comandos():
+    from langchain_core.messages import AIMessage, ToolMessage
+    from mas.pipeline.execucao import _tokens
+    msgs = [
+        AIMessage(content="", tool_calls=[
+            {"name": "read_file", "args": {"file_path": "/workspace/.mas/u/especificacao.json"}, "id": "1"},
+            {"name": "grep", "args": {"pattern": "class Role", "path": "/workspace/backend"}, "id": "2"},
+            {"name": "write_file", "args": {"file_path": "/workspace/backend/A.java", "content": "x"}, "id": "3"},
+            {"name": "execute", "args": {"command": "mvn -q compile"}, "id": "4"}]),
+        ToolMessage(content="x" * 400, tool_call_id="1"),
+        ToolMessage(content="y" * 30, tool_call_id="2"),
+        ToolMessage(content="ok", tool_call_id="3"),
+        ToolMessage(content="z" * 10, tool_call_id="4"),
+        AIMessage(content="", tool_calls=[
+            {"name": "read_file", "args": {"file_path": "/workspace/.mas/u/especificacao.json"}, "id": "5"}]),
+        ToolMessage(content="x" * 400, tool_call_id="5"),
+    ]
+    r = _tokens({"messages": msgs})["leituras"]
+    assert r["read_file /workspace/.mas/u/especificacao.json"] == {"vezes": 2, "chars": 800}
+    assert r["grep 'class Role' em /workspace/backend"] == {"vezes": 1, "chars": 30}
+    assert r["execute mvn -q compile"] == {"vezes": 1, "chars": 10}
+    assert not any(k.startswith("write_file") for k in r)

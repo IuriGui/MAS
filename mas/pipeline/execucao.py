@@ -19,6 +19,8 @@ def _tokens(resultado: dict) -> Dict[str, object]:
                                 "cache_read_tokens": 0, "chamadas_modelo": 0,
                                 "chamadas_tool": 0, "saida_tool_chars": 0,
                                 "maior_saida_tool": 0, "tools_por_nome": {}}
+    total["leituras"] = {}
+    alvos: Dict[str, str] = {}       # tool_call_id -> alvo (arquivo, busca ou comando)
     for m in resultado.get("messages", []):
         u = getattr(m, "usage_metadata", None) or {}
         total["input_tokens"] += u.get("input_tokens", 0)
@@ -30,12 +32,42 @@ def _tokens(resultado: dict) -> Dict[str, object]:
             for tc in getattr(m, "tool_calls", None) or []:
                 nome = tc.get("name", "?")
                 total["tools_por_nome"][nome] = total["tools_por_nome"].get(nome, 0) + 1
+                alvo = _alvo(nome, tc.get("args") or {})
+                if alvo:
+                    alvos[tc.get("id", "")] = alvo
+                    item = total["leituras"].setdefault(alvo, {"vezes": 0, "chars": 0})
+                    item["vezes"] += 1
         elif tipo == "tool":
             total["chamadas_tool"] += 1
             tam = len(str(getattr(m, "content", "")))
             total["saida_tool_chars"] += tam
             total["maior_saida_tool"] = max(total["maior_saida_tool"], tam)
+            alvo = alvos.get(getattr(m, "tool_call_id", "") or "")
+            if alvo:
+                total["leituras"][alvo]["chars"] += tam
     return total
+
+
+def _alvo(nome: str, args: dict) -> str:
+    """O que uma chamada de ferramenta leu ou rodou (para saber o que o agente procura).
+    Escritas ficam de fora: o conteúdo escrito já é contado como saída do modelo."""
+    if nome == "read_file":
+        trecho = f" [{args.get('offset')}+{args.get('limit')}]" if args.get("offset") else ""
+        return f"read_file {args.get('file_path', '?')}{trecho}"
+    if nome in ("grep", "glob"):
+        return f"{nome} {args.get('pattern', '?')!r} em {args.get('path') or '.'}"
+    if nome == "ls":
+        return f"ls {args.get('path', '?')}"
+    if nome == "execute":
+        return f"execute {str(args.get('command', '?'))[:160]}"
+    return ""
+
+
+def somar_leituras(destino: dict, origem: dict) -> None:
+    for alvo, v in origem.items():
+        d = destino.setdefault(alvo, {"vezes": 0, "chars": 0})
+        d["vezes"] += v["vezes"]
+        d["chars"] += v["chars"]
 
 
 # campos somados a cada chamada (os demais: tools_por_nome soma por nome,
@@ -51,6 +83,7 @@ def _acumular(m: dict, tk: Dict[str, object]) -> None:
     nomes = m.setdefault("tools_por_nome", {})
     for n, q in tk["tools_por_nome"].items():
         nomes[n] = nomes.get(n, 0) + q
+    somar_leituras(m.setdefault("leituras", {}), tk.get("leituras", {}))
 
 
 def executar_agente(

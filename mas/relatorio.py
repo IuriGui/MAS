@@ -248,6 +248,15 @@ def render_arquivos(titulo: str, manifesto: List[dict]) -> str:
                 if mt.get("cache_read_tokens"):
                     gasto += f"; em cache: {tokens(mt['cache_read_tokens'])}"
                 gasto += "."
+                lidos = sorted((mt.get("leituras") or {}).items(),
+                               key=lambda x: (-x[1]["chars"], -x[1]["vezes"]))
+                if lidos:
+                    gasto += ("\n\nO que o agente leu ou rodou (maiores saídas primeiro):\n"
+                              + "\n".join(f"- `{alvo}`: {v['vezes']}×, "
+                                           f"{v['chars']:,} caracteres".replace(",", ".")
+                                           for alvo, v in lidos[:15]))
+                    if len(lidos) > 15:
+                        gasto += f"\n- … mais {len(lidos) - 15}"
         partes.append(f"#### Lote {n}\n\nArquivos: {arquivos}{gasto}\n\n{corpo}")
     for f in finais:
         partes.append(f"### Verificação final (pipeline)\n\n`{f['comando']}`: "
