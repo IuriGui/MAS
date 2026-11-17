@@ -205,7 +205,8 @@ def msg_implementador_backend(
         f"BASE API (public signatures; use these exact constructors and methods):\n"
         f"{api_base or NO_FILES}\n\n"
         f"OTHER MODULES' PUBLIC CODE:\n{externas or NO_FILES}\n\n"
-        f"CONTENT OF FILES THIS BATCH DEPENDS ON:\n{dependencias or NO_FILES}\n\n"
+        f"FILES THIS BATCH DEPENDS ON (full content or public signatures):\n"
+        f"{dependencias or NO_FILES}\n\n"
         + _lote(lote)
     )
 
@@ -237,7 +238,8 @@ def msg_implementador_frontend(
         f"\n\nBASE:\n{resumo_base(plano_base, 'frontend')}\n\n"
         f"BASE API (public signatures; use these exact props, types and field names):\n"
         f"{api_base or NO_FILES}\n\n"
-        f"CONTENT OF FILES THIS BATCH DEPENDS ON:\n{dependencias or NO_FILES}\n\n"
+        f"FILES THIS BATCH DEPENDS ON (full content or public signatures):\n"
+        f"{dependencias or NO_FILES}\n\n"
         + _lote(lote)
     )
 
@@ -267,7 +269,8 @@ def msg_implementador_base(
         f"MODE: BASE — batch {i}/{n}\n\nMODULES: {', '.join(modulos)}{extra}{api}\n\n"
         "Conventions:\n" + "\n".join(f"- {c}" for c in plano_base.conventions)
         + f"\n\nBASE PLAN — {lado} files (JSON):\n{_arquivos(arquivos)}\n\n"
-        f"CONTENT OF FILES THIS BATCH DEPENDS ON:\n{dependencias or NO_FILES}\n\n"
+        f"FILES THIS BATCH DEPENDS ON (full content or public signatures):\n"
+        f"{dependencias or NO_FILES}\n\n"
         + _lote(lote)
     )
 

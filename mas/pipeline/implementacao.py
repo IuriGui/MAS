@@ -40,6 +40,10 @@ def _salvar_json(caminho: Path, dados) -> None:
     caminho.write_text(json.dumps(dados, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def _ler_json(caminho: Path) -> dict:
+    return json.loads(caminho.read_text(encoding="utf-8")) if caminho.exists() else {}
+
+
 # ------------------------------------------------------------- lotes
 def montar_lotes(arquivos: List[PlannedFile], tamanho: int = IMPL_LOTE) -> List[List[PlannedFile]]:
     """Agrupa em lotes respeitando depends_on: um arquivo só entra num lote
@@ -69,11 +73,17 @@ def montar_lotes(arquivos: List[PlannedFile], tamanho: int = IMPL_LOTE) -> List[
 
 
 def conteudo_dependencias(raiz: Path, lote: List[PlannedFile],
-                          limite: int = IMPL_LIMITE_CONTEXTO) -> str:
+                          limite: int = IMPL_LIMITE_CONTEXTO,
+                          so_assinaturas: bool = False) -> str:
     """Conteúdo dos arquivos (já gravados) de que o lote depende.
 
     Até `limite` caracteres vão inteiros; os seguintes vão só com as
     assinaturas públicas (nunca omitidos: sem eles o modelo inventa APIs).
+
+    `so_assinaturas` (sandbox): todos vão só com assinaturas e a 1ª frase do
+    Javadoc de cada método. O agente lê o arquivo inteiro com read_file quando
+    precisa da implementação. Mandar o código inteiro custava caro: a mensagem
+    é reenviada a cada passo do agente (relato 8, custo).
     """
     no_lote = {f.path for f in lote}
     partes, total = [], 0
@@ -85,7 +95,10 @@ def conteudo_dependencias(raiz: Path, lote: List[PlannedFile],
             vistos.add(d)
             texto = (raiz / d).read_text(encoding="utf-8")
             bloco = f"=== {d} ===\n{texto}"
-            if total + len(bloco) > limite:
+            if so_assinaturas:
+                bloco = (f"=== {d} === (public signatures; read the file only if you "
+                         f"need the implementation)\n{assinaturas(d, texto)}")
+            elif total + len(bloco) > limite:
                 bloco = (f"=== {d} === (só assinaturas públicas: limite de contexto)\n"
                          f"{assinaturas(d, texto)}")
             partes.append(bloco)
@@ -167,9 +180,14 @@ def executar_lotes(
               f"{len(pendentes)} pendente(s)")
 
     lotes = montar_lotes(pendentes)
-    for i, lote in enumerate(lotes, 1):
-        print(f"  [{etapa}] lote {i}/{len(lotes)}: {len(lote)} arquivo(s)")
-        msg = montar_mensagem(lote, conteudo_dependencias(raiz, lote), i, len(lotes))
+    # numeração continua a dos lotes já feitos (retomada), para não repetir números
+    inicio = max((m.get("lote", 0) for m in manifesto), default=0)
+    for i, lote in enumerate(lotes, inicio + 1):
+        total = inicio + len(lotes)
+        print(f"  [{etapa}] lote {i}/{total}: {len(lote)} arquivo(s)", flush=True)
+        antes = dict(metricas.get(etapa, {}))
+        deps = conteudo_dependencias(raiz, lote, so_assinaturas=sandbox is not None)
+        msg = montar_mensagem(lote, deps, i, total)
         k = conhecidos()
         coleta = None
         if sandbox is not None:
@@ -188,7 +206,7 @@ def executar_lotes(
             invalido = pasta / f"{etapa}.lote{i}.invalido.json"
             invalido.write_text(gerados.model_dump_json(indent=2), encoding="utf-8")
             raise PipelineError(
-                f"Etapa '{etapa}' (lote {i}/{len(lotes)}) não passou na validação após "
+                f"Etapa '{etapa}' (lote {i}/{total}) não passou na validação após "
                 f"{max_tentativas} tentativas:\n- " + "\n- ".join(erros)
                 + f"\nÚltima saída em {invalido}")
         esperados = {f.path for f in lote}
@@ -197,8 +215,14 @@ def executar_lotes(
             manifesto.append({"path": caminho, "lote": i})
         if gerados.notes:
             manifesto.append({"lote": i, "notas": gerados.notes})
-        _salvar_json(progresso, manifesto)
         metricas[etapa]["lotes"] = metricas[etapa].get("lotes", 0) + 1
+        depois = metricas[etapa]
+        manifesto.append({"lote": i, "metricas": {
+            c: round(depois.get(c, 0) - antes.get(c, 0), 2)
+            for c in ("tentativas", "segundos", "input_tokens", "output_tokens")}})
+        _salvar_json(progresso, manifesto)
+        # a cada lote, para acompanhar o gasto durante a execução
+        _salvar_json(pasta / "metricas.json", metricas)
     progresso.unlink(missing_ok=True)
     return manifesto
 
@@ -237,7 +261,10 @@ def garantir_base(
     Artefatos: <pasta>/5_plano.json, 6_backend.json, 7_frontend.json.
     """
     pasta.mkdir(parents=True, exist_ok=True)
-    metricas = {} if metricas is None else metricas
+    if metricas is None:
+        # acumula entre execuções (backend numa, frontend noutra, retomadas):
+        # recomeçar do zero sobrescrevia as métricas já gravadas da base
+        metricas = _ler_json(pasta / "metricas.json")
     conv = validacao.convencoes(contexto)
     rotas = layout.rotas_dos_modulos(modulos)
     front = layout.tem_frontend(contexto)

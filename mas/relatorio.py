@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from mas.metricas import tempo, tokens
 from mas.schemas import (FinalSpecification, ImplementationPlan, ModuleAnalysis,
                          ModuleArchitecture, ModuleDataModel, ProjectContext)
 
@@ -204,11 +205,13 @@ def render_arquivos(titulo: str, manifesto: List[dict]) -> str:
     lotes: Dict[str, dict] = {}
     for m in manifesto:
         lote = lotes.setdefault(str(m.get("lote", "—")),
-                                {"arquivos": [], "notas": [], "gerado_por": None})
+                                {"arquivos": [], "notas": [], "gerado_por": None,
+                                 "metricas": None})
         if "path" in m:
             lote["arquivos"].append(m["path"])
         lote["notas"].extend(m.get("notas", []))
         lote["gerado_por"] = lote["gerado_por"] or m.get("gerado_por")
+        lote["metricas"] = lote["metricas"] or m.get("metricas")
     total = sum(len(l["arquivos"]) for l in lotes.values())
     sem_relato = [n for n, l in lotes.items() if not l["notas"] and not l["gerado_por"]]
 
@@ -225,7 +228,13 @@ def render_arquivos(titulo: str, manifesto: List[dict]) -> str:
             corpo = ("\n>\n".join(_citacao(x) for x in l["notas"])
                      or "_Sem relato: o agente terminou o lote sem mensagem final._")
         arquivos = ", ".join(f"`{a}`" for a in l["arquivos"]) or "—"
-        partes.append(f"#### Lote {n}\n\nArquivos: {arquivos}\n\n{corpo}")
+        gasto = ""
+        if l["metricas"]:
+            mt = l["metricas"]
+            gasto = (f"\n\nGasto: {tokens(mt['input_tokens'])} tokens de entrada, "
+                     f"{tokens(mt['output_tokens'])} de saída, {tempo(mt['segundos'])}, "
+                     f"{int(mt['tentativas'])} tentativa(s).")
+        partes.append(f"#### Lote {n}\n\nArquivos: {arquivos}{gasto}\n\n{corpo}")
     return "\n\n".join(partes)
 
 

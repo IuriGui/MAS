@@ -47,13 +47,21 @@ Todas as variáveis estão em `.env.example` e `mas/config.py`.
 e o cache do `tech_stack` sobem na mesma rede Docker. `SANDBOX=0` volta aos
 Implementadores sem sandbox (só saída estruturada).
 
-**Custo:** as etapas de implementação fazem uma chamada por lote de arquivos.
-Um módulo como Users pode passar de 10 chamadas de ~20–30 mil tokens de entrada.
-Para testar prompts, prefira `--ate planejador` primeiro.
+**Custo:** as etapas de implementação fazem uma chamada por lote de arquivos, e no
+sandbox cada chamada tem dezenas de passos que reenviam a conversa inteira. Com o
+código das dependências inteiro na mensagem, Users gastou 24 milhões de tokens de
+entrada e Catalog 41 milhões (ver `ALTERACOES.md`, relato 8). Hoje as dependências
+vão só com assinaturas. Acompanhe em `saida/<projeto>/metricas.md`. Para testar
+prompts, prefira `--ate planejador` primeiro.
 
 Saída do projeto em `saida/<projeto>/`: `0_contexto.json`, `contexto.md`,
-`projeto.json` (status de cada módulo), `base/` (plano e manifestos da base),
-`codigo/backend` e `codigo/frontend` (código de todos os módulos) e uma pasta por módulo.
+`projeto.json` (status de cada módulo), `base/` (plano, manifestos e `relatorio.md`
+da base), `codigo/backend` e `codigo/frontend` (código de todos os módulos), uma pasta
+por módulo e `metricas.md` / `metricas_projeto.json`: tokens, tempo, tentativas e lotes
+no total, por módulo e por parte (especificação, planejamento, backend, frontend),
+atualizados a cada módulo. Para regenerar: `python -m mas.metricas saida/<projeto>`.
+O `metricas.json` de cada pasta é gravado a cada lote, e o `relatorio.md` mostra o
+gasto e o relato do agente de cada lote.
 Saída de cada módulo: `1_analise.json`, `2_especificacao.json`,
 `3_modelo_dados.json`, `4_arquitetura.json`, `5_plano.json`, `6_backend.json` e
 `7_frontend.json` (arquivos gerados), `relatorio.md` e `metricas.json`.

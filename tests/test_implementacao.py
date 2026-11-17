@@ -582,7 +582,8 @@ def test_retomada_gera_so_o_que_falta(tmp_path):
                            saida_dir=str(tmp_path))
     # 2ª execução: o planejador refaz o plano (igual), mas só o lote pendente é gerado
     modulo = [c for c in bom.chamadas if "MODE: MODULE" in c]
-    assert len(modulo) == 1 and "batch 1/1" in modulo[0]
+    # a numeração continua a da 1ª execução (lote 2 de 2), sem repetir o lote 1
+    assert len(modulo) == 1 and "batch 2/2" in modulo[0]
     pedidos_2 = {f["path"] for f in json.loads(modulo[0].split("(JSON):\n")[-1])}
     assert pedidos_2 == {f"{MAIN}/api/UserController.java",
                          f"src/test/java/{PKG}/service/UserServiceTest.java"}
@@ -785,3 +786,110 @@ def test_relatorio_da_retomada_inclui_backend_e_base_tem_relatorio(tmp_path):
     assert "## Código backend" in rel and "## Código frontend" in rel
     base = (tmp_path / "usuarios" / "base" / "relatorio.md").read_text()
     assert base.startswith("# Base compartilhada") and "Relato do implementador" in base
+
+
+# ================================================================ métricas
+def test_metricas_por_lote_e_consolidadas(tmp_path):
+    from tests.fakes import contexto
+    processar_projeto("Loja", SISTEMA, contexto=contexto(),
+                      fabrica_agentes=lambda c: agentes(), saida_dir=str(tmp_path))
+    pasta = tmp_path / "loja"
+    manifesto = json.loads((pasta / "users" / "6_backend.json").read_text())
+    por_lote = [m["metricas"] for m in manifesto if "metricas" in m]
+    assert por_lote and all(m["tentativas"] == 1 for m in por_lote)
+    assert "Gasto:" in (pasta / "users" / "relatorio.md").read_text()
+
+    cons = json.loads((pasta / "metricas_projeto.json").read_text())
+    nomes = [l["nome"] for l in cons["linhas"]]
+    assert nomes[0] == "Base compartilhada" and "Users" in nomes
+    users = next(l for l in cons["linhas"] if l["nome"] == "Users")["partes"]
+    assert {"especificação", "planejamento", "backend", "frontend"} <= set(users)
+    assert users["backend"]["lotes"] == len(por_lote)
+    total = cons["total"]["total"]["tentativas"]
+    assert total == sum(l["total"]["tentativas"] for l in cons["linhas"])
+    md = (pasta / "metricas.md").read_text()
+    assert "## Por módulo e parte" in md and "| Users | backend |" in md
+
+
+def test_metricas_da_base_nao_sao_zeradas_por_outra_execucao(tmp_path):
+    processar_modulo("Usuários", "d", agentes=agentes(), saida_dir=str(tmp_path))
+    arq = tmp_path / "usuarios" / "base" / "metricas.json"
+    antes = json.loads(arq.read_text())
+    assert "implementador_backend_base" in antes
+    processar_modulo("Usuários", "d", de="implementador_frontend", agentes=agentes(),
+                     saida_dir=str(tmp_path))
+    assert json.loads(arq.read_text()) == antes      # base já pronta: nada muda
+
+
+def test_projeto_mantem_status_de_execucoes_anteriores(tmp_path):
+    from tests.fakes import contexto
+    pasta = tmp_path / "loja"
+    pasta.mkdir()
+    (pasta / "projeto.json").write_text(json.dumps(
+        {"modulos": {"Anterior": {"status": "ok"}}}))
+    processar_projeto("Loja", SISTEMA, contexto=contexto(), apenas=["catalog"],
+                      fabrica_agentes=lambda c: agentes(), saida_dir=str(tmp_path))
+    st = json.loads((pasta / "projeto.json").read_text())["modulos"]
+    assert "Anterior" in st and st["Catalog"]["status"] == "ok"
+    assert (pasta / "metricas.md").exists()
+
+
+# ================================================================ assinaturas e Lombok
+def test_dependencias_no_sandbox_vao_so_como_assinaturas(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "a/BusinessException.java").write_text(JAVA_CLASSE)
+    f = arq("a/Servico.java", "service", deps=["a/BusinessException.java"])
+    txt = implementacao.conteudo_dependencias(tmp_path, [f], so_assinaturas=True)
+    assert "public signatures" in txt and "super(message)" not in txt
+    assert "BusinessException" in txt
+
+
+def test_assinaturas_com_javadoc_e_lombok():
+    src = """package x;
+import lombok.*;
+@Entity
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class Produto {
+    @Column(name = "sku", nullable = false)
+    private String sku;
+    private boolean ativo;
+    private final List<String> tags = new ArrayList<>();
+    private static final long serialVersionUID = 1L;
+    /**
+     * Calcula o preço final aplicando o desconto. Arredonda em 2 casas.
+     * @param desconto percentual
+     */
+    public BigDecimal precoFinal(BigDecimal desconto) {
+        return null;
+    }
+}"""
+    r = assinaturas("x/Produto.java", src)
+    assert "public String getSku() { ... }  // Lombok" in r
+    assert "public void setSku(String sku)" in r
+    assert "public boolean isAtivo()" in r
+    assert "getTags()" in r and "setTags" not in r          # final: só getter
+    assert "serialVersionUID" not in r and "@Column" not in r
+    assert "// Calcula o preço final aplicando o desconto." in r
+    assert "Arredonda" not in r and "@param" not in r
+    assert "public Produto() { ... }  // Lombok" in r
+    assert "public Produto(String sku, boolean ativo) { ... }  // Lombok" in r
+    assert "builder()" in r
+
+
+def test_assinaturas_campo_com_getter_proprio_do_campo():
+    src = """package x;
+public class Evento {
+    @Getter
+    private final UUID id;
+    private String interno;
+    public Evento(UUID id) {
+        this.id = id;
+    }
+}"""
+    r = assinaturas("x/Evento.java", src)
+    assert "public UUID getId()" in r and "getInterno" not in r
+    assert "public Evento(UUID id) { ... }" in r

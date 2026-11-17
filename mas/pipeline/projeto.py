@@ -19,6 +19,7 @@ from mas.agentes import mensagens
 from mas.agentes.fabrica import (ambiente_sandbox, criar_agentes,
                                  criar_arquiteto_chefe)
 from mas.codigo.layout import slugify
+from mas.metricas import gravar_metricas
 from mas.config import MAX_TENTATIVAS, SAIDA_DIR, VALIDAR
 from mas.pipeline import implementacao
 from mas.pipeline.execucao import PipelineError, executar_agente
@@ -152,7 +153,10 @@ def processar_projeto(
     plano_base = None
     arquiteturas: Dict[str, object] = _arquiteturas_existentes(pasta, contexto)
     implementa = ETAPAS.index(ate) >= ETAPAS.index("planejador")
-    status: Dict[str, dict] = {}
+    # status de execuções anteriores (ex.: --apenas outro módulo) é mantido
+    anterior = pasta / "projeto.json"
+    status: Dict[str, dict] = (json.loads(anterior.read_text(encoding="utf-8")).get("modulos", {})
+                               if anterior.exists() else {})
     # Um sandbox (e uma rede com banco/cache) para o projeto inteiro: os módulos
     # compartilham o código, o banco com as migrations e o cache do Maven/npm.
     with ExitStack() as pilha:
@@ -168,6 +172,7 @@ def processar_projeto(
                 contexto, list(contexto.build_order), pasta / "base", codigo,
                 agentes_base, lado_final(ate), max_tentativas,
                 arquiteturas=arquiteturas or None)
+            gravar_metricas(pasta, contexto.build_order)
 
         for numero, nome in enumerate(contexto.build_order, 1):
             if filtro and nome.strip().lower() not in filtro:
@@ -189,6 +194,7 @@ def processar_projeto(
             except PipelineError as e:
                 print(f"  FALHA em {nome}: {e}")
                 status[nome] = {"status": "falhou", "erro": str(e)}
+                gravar_metricas(pasta, contexto.build_order)
                 continue
             if "arquitetura" in res:
                 arquiteturas[nome] = res["arquitetura"]
@@ -199,6 +205,7 @@ def processar_projeto(
                 "review_alerts": spec.review_alerts if spec else [],
                 "metricas": res["metricas"],
             }
+            gravar_metricas(pasta, contexto.build_order)
 
     _salvar_json(pasta / "projeto.json", {
         "projeto": nome_projeto,

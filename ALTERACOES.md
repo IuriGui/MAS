@@ -1,6 +1,6 @@
 # Alterações
 
-- [Relato 8. Execução com sandbox: três erros documentados, não corrigidos](#relato-8-execução-com-sandbox-três-erros-documentados-não-corrigidos)
+- [Relato 8. Execução com sandbox: quatro erros documentados, não corrigidos](#relato-8-execução-com-sandbox-quatro-erros-documentados-não-corrigidos)
 - [Relato 7. Organização dos arquivos](#relato-7-organização-dos-arquivos)
 - [Relato 6. Implementadores no sandbox Docker](#relato-6-implementadores-no-sandbox-docker)
 - [Relato 5. Regeneração do módulo e aplicação no ar](#relato-5-regeneração-do-módulo-e-aplicação-no-ar)
@@ -11,7 +11,7 @@
 
 ---
 
-## Relato 8. Execução com sandbox: três erros documentados, não corrigidos
+## Relato 8. Execução com sandbox: quatro erros documentados, não corrigidos
 
 Data: 16/11/2026. Commit `c00c820`, módulo Users, a partir do backup `impl_f3`.
 Este relato registra os erros e as correções a fazer; nada foi alterado no
@@ -150,6 +150,11 @@ plano citava `users`, `catalog` e `inventory`, e o agente ampliou para os 8. A
 `Sidebar.tsx` (lote 3) também lista os 8 módulos, mas como links fixos, sem
 import; ela compila e leva à página 404 nos módulos que faltam.
 
+A instrução de importar cada módulo vem do próprio prompt do Planejador da
+base (`mas/agentes/prompts.py`, regras do BASE PLAN): "The router imports
+every module's routes file at the paths given in the message". O agente fez
+o que foi pedido.
+
 Os dois agentes viram o erro e o ignoraram, como o prompt permite. Os resumos
 estão no campo `notas` dos manifestos:
 
@@ -252,6 +257,46 @@ Acrescentar um teste que erra a senha cinco vezes e espera 423.
    alertas da especificação.
 3. **Lote sem relato:** registrar como alerta (hoje só aparece no relatório).
 
+### Erro 4: a redefinição de senha não fecha (FR06)
+
+`POST /api/v1/auth/forgot-password` gera o token, grava só o hash em
+`password_reset_tokens` e descarta o token original no fim do método
+(`AuthenticationService.forgotPassword`). Ele não vai para e-mail, log, evento
+nem resposta HTTP. `POST /api/v1/auth/reset-password` exige esse token
+original (`reset_token`). O endpoint existe, mas ninguém consegue concluir uma
+redefinição.
+
+O teste gerado (`AuthenticationIntegrationTest.testResetPassword_SuccessAndSingleUseEnforcement`)
+cria o token no próprio teste e grava o hash direto no repositório, sem passar
+pelo `forgot-password`, e por isso passa. O outro teste do fluxo só confere que
+`forgot-password` responde 200.
+
+**Causa:** a lacuna começa na especificação. O FR06 pede "a cryptographically
+secure, single-use reset token valid for 15 minutes" e a especificação
+consolidada descreve geração, hash e validade, mas não diz por onde o token
+chega ao usuário. A lista de eventos do módulo não tem um evento de pedido de
+redefinição, e notificação (e-mail) não está no escopo de nenhum módulo do
+ERP. O Implementador seguiu a especificação ao pé da letra, e nenhum agente
+apontou a lacuna. Não está nos alertas de revisão humana nem nos relatos dos
+lotes.
+
+### Correção do erro 4 (não aplicada)
+
+**No código gerado:** publicar um evento `PasswordResetRequestedEvent` com o
+token, para um módulo de notificação consumir, e, enquanto esse módulo não
+existir, registrar o token no log só no perfil de desenvolvimento. Trocar o
+teste por um que chama `forgot-password`, captura o evento e usa o token em
+`reset-password`.
+
+**No pipeline:**
+
+1. **Especificação:** o Esclarecedor verifica, para cada fluxo que entrega algo
+   ao usuário fora da API (token, convite, senha temporária), por qual canal
+   isso chega. Sem canal no escopo, vira alerta de revisão humana.
+2. **Testes pelo fluxo público:** o prompt do Implementador pede que os testes
+   de integração de um fluxo usem os endpoints do próprio fluxo, sem gravar
+   estado intermediário direto no repositório.
+
 ### Onde ver o relato dos agentes
 
 Cada Implementador termina o lote com uma mensagem: o que gerou, o que
@@ -272,6 +317,121 @@ Mudança feita (`mas/relatorio.py`, `mas/pipeline/modulo.py`,
 Testes: 2 novos em `tests/test_implementacao.py` (111 no total). Os relatórios
 desta execução foram regenerados a partir dos artefatos, sem LLM:
 `saida/sistema/users/relatorio.md` e `saida/sistema/base/relatorio.md`.
+
+### Custo: dependências só com assinaturas, e Lombok
+
+Feito depois de constatado o gasto elevado de tokens nos dois primeiros
+módulos (implementação, entrada / saída):
+
+| | Backend | Frontend |
+|---|---|---|
+| Users | 16,58 mi / 178 mil (11 lotes, 1,5 mi por lote) | 7,31 mi / 87 mil (3 lotes) |
+| Catalog | 33,11 mi / 328 mil (10 lotes, 3,3 mi por lote) | 7,55 mi / 140 mil (4 lotes) |
+
+A entrada fica 50 a 100 vezes maior que a saída porque o deep agent reenvia a
+conversa inteira a cada passo, inclusive a mensagem do lote. Nessa mensagem ia
+o código inteiro de cada arquivo de que o lote depende (`depends_on`), até 400
+mil caracteres. O Catalog depende de mais arquivos que o Users. Somando os
+lotes, mandou 583 mil caracteres de dependências, e o lote mais pesado levou
+193 mil caracteres (~48 mil tokens), reenviados a cada passo.
+
+O Implementador não precisa do corpo dos métodos das dependências, só do que
+cada método faz e do que recebe e devolve. No sandbox ele ainda pode ler
+qualquer arquivo com `read_file`.
+
+**Mudanças:**
+
+1. **Dependências só com assinaturas no sandbox**
+   (`implementacao.conteudo_dependencias(so_assinaturas=True)`): cada arquivo
+   do `depends_on` vai com pacote, tipo, construtores, métodos e campos
+   públicos, sem corpo, e cada método com a 1ª frase do seu Javadoc. O prompt
+   (`MODO_SANDBOX`) diz que isso basta para chamar o código e que o arquivo
+   inteiro só deve ser lido quando a implementação for necessária. Fora do
+   sandbox (`SANDBOX=0`), o agente não tem como ler arquivos, e continua
+   recebendo o código inteiro.
+2. **`assinaturas.py`:**
+   - acrescenta a 1ª frase do Javadoc de cada método;
+   - gera as assinaturas que o Lombok cria (`@Getter`, `@Setter`, `@Data`,
+     `@Value` na classe ou no campo, `@NoArgsConstructor`,
+     `@AllArgsConstructor`, `@RequiredArgsConstructor` e `@Builder`), para a
+     API continuar aparecendo inteira;
+   - deixa de mostrar anotações de campos privados soltas.
+3. **Lombok** (`mas/agentes/prompts.py`), em dois prompts:
+   - `IMPLEMENTADOR_BACKEND` (lotes da base e dos módulos), regra nova depois
+     da de mapeamento da persistência:
+     ```
+     - Java with Lombok in the build file: do not hand-write boilerplate that Lombok
+       generates (getters, setters, constructors, builders, equals/hashCode,
+       toString). JPA entities: @Getter, @Setter and @NoArgsConstructor (plus
+       constructors with logic, if any); never @Data, @EqualsAndHashCode or
+       @ToString on entities. DTOs, events and exceptions: Lombok (@Getter,
+       @Setter, @NoArgsConstructor, @AllArgsConstructor, @Builder as needed) or
+       Java records. Services and controllers: @RequiredArgsConstructor with final
+       fields instead of a hand-written constructor.
+     ```
+     `@Data`, `@EqualsAndHashCode` e `@ToString` ficam proibidos em entidades
+     porque o `equals`/`hashCode`/`toString` gerado percorre relacionamentos
+     lazy.
+   - `PLANEJADOR`, regras do BASE PLAN: o item do backend passou de "build and
+     configuration files" para "build and configuration files (for Java,
+     include Lombok with its annotation processor configured)". Só tem efeito
+     se a base for gerada de novo.
+
+   O `pom.xml` desta execução já tem o Lombok com o processador de anotações,
+   só não era usado. A base, Users e Catalog continuam sem Lombok, e só os
+   módulos seguintes o usam.
+
+**Medido sem LLM** (dependências somadas de todos os lotes, em caracteres):
+
+| | Antes | Só assinaturas |
+|---|---|---|
+| Users, backend | 360.602 | 124.856 (35%) |
+| Catalog, backend | 583.261 | 138.249 (24%) |
+| Users, frontend | 176.862 | 9.880 (6%) |
+| Catalog, frontend | 317.774 | 31.467 (10%) |
+
+Getters, setters, `equals`/`hashCode`/`toString` e construtores triviais eram
+19% do código gerado do backend de Users e 14% do de Catalog, e 23 a 26% das
+dependências enviadas. O Lombok reduz o que o agente escreve e o que entra no
+histórico; com as dependências já só em assinaturas, o efeito dele na entrada
+é menor.
+
+**A comparar:** o gasto por lote dos próximos módulos (agora no `relatorio.md`
+e em `metricas.md`) contra Users e Catalog. O risco é o agente ler mais
+arquivos, ou chamar a API errada por não ver o corpo, e devolver parte da
+economia. Isso aparece no número de tentativas e nos relatos dos lotes.
+
+Testes: 3 novos (117 no total).
+
+### Métricas do projeto
+
+Mudança feita (`mas/metricas.py`, `mas/pipeline/projeto.py`,
+`mas/pipeline/implementacao.py`):
+
+- `saida/<projeto>/metricas.md` e `metricas_projeto.json`: tokens de entrada e
+  de saída, tempo, tentativas e lotes no total, por módulo (Arquiteto-chefe,
+  base e cada módulo) e por parte (especificação, planejamento, backend,
+  frontend). São regravados depois da base e de cada módulo, e
+  `python -m mas.metricas saida/<projeto>` os regenera a partir dos
+  `metricas.json`. O tempo é o das chamadas aos agentes, incluindo o que eles
+  rodam no sandbox.
+- Por lote: o manifesto registra tokens, tempo e tentativas de cada lote, e o
+  `relatorio.md` mostra esse gasto ao lado do relato do agente.
+- `metricas.json` é gravado a cada lote, e não só no fim do módulo.
+- Três perdas de dados corrigidas:
+  - a base recomeçava as métricas do zero a cada execução e sobrescrevia o
+    arquivo. Na execução do Catalog, o `base/metricas.json` virou `{}` e foi
+    restaurado à mão com os números acima;
+  - o `projeto.json` só guardava os módulos da execução atual, e um
+    `--apenas Catalog` apagava o status de Users;
+  - na retomada, os lotes recomeçavam do 1 e repetiam números no manifesto.
+    Agora continuam a numeração ("batch 2/2").
+
+As métricas das etapas de especificação e planejamento de Users e Catalog não
+existem: foram geradas antes do backup, e o `metricas.json` daquelas execuções
+não foi guardado.
+
+Testes: 3 novos (114 no total).
 
 ### Outras pendências desta execução
 

@@ -276,7 +276,8 @@ architecture, the generated migration, the BASE plan and other modules):
 
 BASE PLAN (inputs: PROJECT CONTEXT and the list of modules):
 Plan the shared skeleton every module plugs into, and nothing module-specific:
-- backend: build and configuration files, application entry point, and shared
+- backend: build and configuration files (for Java, include Lombok with its
+  annotation processor configured), application entry point, and shared
   cross-cutting code required by the PROJECT CONTEXT (error format, security and
   token validation, tenant context if multi-tenancy is enabled, base entity or
   auditing support, transactional outbox if events use it, pagination types);
@@ -328,6 +329,14 @@ Strict Rules:
   listed in `exports`.
 - Persistence mapping must match the migration exactly (table names, column
   names, types, nullability). Never change the schema.
+- Java with Lombok in the build file: do not hand-write boilerplate that Lombok
+  generates (getters, setters, constructors, builders, equals/hashCode,
+  toString). JPA entities: @Getter, @Setter and @NoArgsConstructor (plus
+  constructors with logic, if any); never @Data, @EqualsAndHashCode or
+  @ToString on entities. DTOs, events and exceptions: Lombok (@Getter,
+  @Setter, @NoArgsConstructor, @AllArgsConstructor, @Builder as needed) or
+  Java records. Services and controllers: @RequiredArgsConstructor with final
+  fields instead of a hand-written constructor.
 - Implement the business rules of the requirements cited by each file and add a
   short comment with the requirement ID where a rule is enforced.
 - Enforce the roles declared for each endpoint, the tenant isolation and the
@@ -395,6 +404,9 @@ SANDBOX MODE (you work inside a Docker container with JDK, Maven, Node/npm, curl
 - Write each file of the batch with write_file at the absolute path given in the
   message; fix it with edit_file. Read any existing file with read_file/grep
   instead of guessing its API.
+- The files this batch depends on come as public signatures, each method with
+  a one-line description when it has a doc comment. That is usually enough to
+  call them; read a file with read_file only when you need its implementation.
 - Do NOT create, modify or delete files outside the batch: those changes are
   discarded automatically. If a file outside the batch is wrong, report it in
   your final message.
