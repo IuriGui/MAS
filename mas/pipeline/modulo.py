@@ -30,7 +30,7 @@ from mas.codigo.layout import slugify
 from mas.config import CONTEXTO_PADRAO, MAX_TENTATIVAS, SAIDA_DIR
 from mas.pipeline import implementacao
 from mas.pipeline.execucao import PipelineError, executar_agente
-from mas.relatorio import renderizar_relatorio
+from mas.relatorio import ler_manifestos, renderizar_relatorio
 from mas.schemas import (FinalSpecification, ImplementationPlan, ModuleAnalysis,
                          ModuleArchitecture, ModuleDataModel, ProjectContext)
 
@@ -255,8 +255,16 @@ def _etapas_de_implementacao(nome, contexto, artefatos, agentes, pasta, codigo,
         else:
             print(f"[7/7] implementador_frontend — sem frontend para {nome}, pulado")
 
+    # no relatório entra também o código de etapas anteriores a `de` (retomada)
+    def antes_do_inicio(etapa: str) -> bool:
+        return not roda(etapa) and any(roda(e) for e in ETAPAS[ETAPAS.index(etapa) + 1:])
+
+    etapa_do = {"arquivos_backend": "implementador_backend",
+                "arquivos_frontend": "implementador_frontend"}
+    anteriores = {chave: m for chave, m in ler_manifestos(pasta).items()
+                  if antes_do_inicio(etapa_do[chave])}
     (pasta / "relatorio.md").write_text(
-        renderizar_relatorio(nome, artefatos), encoding="utf-8")
+        renderizar_relatorio(nome, {**anteriores, **artefatos}), encoding="utf-8")
     (pasta / "metricas.json").write_text(json.dumps(metricas, indent=2))
     artefatos["pasta"] = str(pasta)
     artefatos["codigo"] = str(codigo)

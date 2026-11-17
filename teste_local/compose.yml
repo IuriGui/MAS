@@ -1,0 +1,99 @@
+# Sobe o código gerado (saida/sistema/codigo) para testar à mão.
+#
+#   docker compose -f teste_local/compose.yml up        # da raiz do projeto
+#   docker compose -f teste_local/compose.yml down -v   # derruba e apaga o banco
+#
+# Frontend: http://localhost:3000   (login: admin@teste.local / Admin@123,
+#                                    tenant 00000000-0000-0000-0000-000000000001)
+# Backend:  http://localhost:8080   (ex.: /actuator/health)
+# Banco:    localhost:5433          (app / app, base app)
+#
+# O código é montado só para leitura e copiado para dentro do container; nada é
+# gravado em saida/. Outra pasta de código: CODIGO=../outra/pasta docker compose ...
+# Mudou o código? docker compose -f teste_local/compose.yml restart backend frontend
+
+name: mas-teste
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    ports:
+      - "5433:5432"
+    volumes:
+      - dados:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 3s
+      retries: 20
+
+  backend:
+    image: maven:3.9-eclipse-temurin-21
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/app
+      SPRING_DATASOURCE_USERNAME: app
+      SPRING_DATASOURCE_PASSWORD: app
+    volumes:
+      - ${CODIGO:-../saida/sistema/codigo}/backend:/src:ro
+      - m2:/root/.m2
+    command:
+      - sh
+      - -c
+      - |
+        rm -rf /app && cp -r /src /app && cd /app && rm -rf target
+        mvn -q -B -DskipTests package && exec java -jar target/*.jar
+    # o frontend usa a rede deste serviço (o proxy do Vite aponta para
+    # localhost:8080), então a porta dele também é publicada aqui
+    ports:
+      - "8080:8080"
+      - "3000:3000"
+
+  frontend:
+    image: node:20-alpine
+    depends_on:
+      - backend
+    network_mode: "service:backend"
+    environment:
+      VITE_DEFAULT_TENANT_ID: 00000000-0000-0000-0000-000000000001
+    volumes:
+      - ${CODIGO:-../saida/sistema/codigo}/frontend:/src:ro
+      - npm:/root/.npm
+    command:
+      - sh
+      - -c
+      - |
+        rm -rf /app && mkdir /app && cd /src
+        tar --exclude=./node_modules -cf - . | tar -xf - -C /app
+        cd /app && npm ci --no-audit --no-fund && exec npx vite --host 0.0.0.0 --port 3000
+
+  # Usuário administrador para o login (o módulo não tem seed nem cadastro público).
+  # Espera o Hibernate criar as tabelas e insere; pode rodar mais de uma vez.
+  seed:
+    image: postgres:16-alpine
+    depends_on:
+      - backend
+    environment:
+      PGHOST: db
+      PGUSER: app
+      PGPASSWORD: app
+      PGDATABASE: app
+    volumes:
+      - ./seed_admin.sql:/seed_admin.sql:ro
+    command:
+      - sh
+      - -c
+      - |
+        until psql -tAc "select to_regclass('public.user_roles')" 2>/dev/null | grep -q user_roles; do sleep 3; done
+        sleep 2 && psql -v ON_ERROR_STOP=1 -q -f /seed_admin.sql && echo "seed ok"
+    restart: on-failure
+
+volumes:
+  dados:
+  m2:
+  npm:

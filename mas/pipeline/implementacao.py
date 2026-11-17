@@ -28,6 +28,7 @@ from mas.codigo.ddl import gerar_ddl, usa_sql
 from mas.config import (IMPL_LIMITE_CONTEXTO, IMPL_LOTE, LIMITE_PASSOS_AGENTE,
                         LIMITE_PASSOS_SANDBOX, MAX_TENTATIVAS)
 from mas.pipeline.execucao import PipelineError, executar_agente
+from mas.relatorio import ler_manifestos, renderizar_relatorio
 from mas.schemas import (FinalSpecification, ImplementationPlan, ModuleArchitecture,
                          ModuleDataModel, PlannedFile, ProjectContext)
 
@@ -269,6 +270,9 @@ def garantir_base(
                           arquiteturas or {})
     finally:
         _salvar_json(pasta / "metricas.json", metricas)  # mesmo se falhar
+        (pasta / "relatorio.md").write_text(renderizar_relatorio(
+            "base", {"plano": plano, **ler_manifestos(pasta)},
+            titulo="Base compartilhada"), encoding="utf-8")
     return plano
 
 

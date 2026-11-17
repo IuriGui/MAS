@@ -1,5 +1,7 @@
 """Converte os artefatos estruturados em markdown legível para humanos."""
-from typing import List
+import json
+from pathlib import Path
+from typing import Dict, List, Optional
 
 from mas.schemas import (FinalSpecification, ImplementationPlan, ModuleAnalysis,
                          ModuleArchitecture, ModuleDataModel, ProjectContext)
@@ -184,16 +186,51 @@ def render_plano(p: ImplementationPlan) -> str:
     )
 
 
+MANIFESTOS = {"arquivos_backend": "6_backend.json", "arquivos_frontend": "7_frontend.json"}
+
+
+def ler_manifestos(pasta: Path) -> Dict[str, List[dict]]:
+    """Manifestos de código já gravados em `pasta` (chave em artefatos -> manifesto)."""
+    return {chave: json.loads((pasta / arq).read_text(encoding="utf-8"))
+            for chave, arq in MANIFESTOS.items() if (pasta / arq).exists()}
+
+
+def _citacao(texto: str) -> str:
+    return "\n".join(f"> {linha}".rstrip() for linha in texto.strip().splitlines())
+
+
 def render_arquivos(titulo: str, manifesto: List[dict]) -> str:
-    arquivos = [m["path"] for m in manifesto if "path" in m]
-    notas = [n for m in manifesto for n in m.get("notas", [])]
-    return (f"## {titulo}\n\n{len(arquivos)} arquivo(s):\n"
-            + _lista([f"`{a}`" for a in arquivos])
-            + (f"\n\n### Notas do implementador\n{_lista(notas)}" if notas else ""))
+    """Arquivos gerados e o relato do implementador (última mensagem) de cada lote."""
+    lotes: Dict[str, dict] = {}
+    for m in manifesto:
+        lote = lotes.setdefault(str(m.get("lote", "—")),
+                                {"arquivos": [], "notas": [], "gerado_por": None})
+        if "path" in m:
+            lote["arquivos"].append(m["path"])
+        lote["notas"].extend(m.get("notas", []))
+        lote["gerado_por"] = lote["gerado_por"] or m.get("gerado_por")
+    total = sum(len(l["arquivos"]) for l in lotes.values())
+    sem_relato = [n for n, l in lotes.items() if not l["notas"] and not l["gerado_por"]]
+
+    partes = [f"## {titulo}", f"{total} arquivo(s) em {len(lotes)} lote(s)."]
+    if sem_relato:
+        partes.append(f"**Lotes sem relato do implementador:** {', '.join(sem_relato)}.")
+    partes.append("### Relato do implementador, por lote\n\n"
+                  "Última mensagem do agente em cada lote: o que ele diz ter gerado e "
+                  "verificado, e os problemas que encontrou (campo `notas` do manifesto).")
+    for n, l in lotes.items():
+        if l["gerado_por"]:
+            corpo = f"_Gerado em código por `{l['gerado_por']}`, sem agente._"
+        else:
+            corpo = ("\n>\n".join(_citacao(x) for x in l["notas"])
+                     or "_Sem relato: o agente terminou o lote sem mensagem final._")
+        arquivos = ", ".join(f"`{a}`" for a in l["arquivos"]) or "—"
+        partes.append(f"#### Lote {n}\n\nArquivos: {arquivos}\n\n{corpo}")
+    return "\n\n".join(partes)
 
 
-def renderizar_relatorio(nome: str, artefatos: dict) -> str:
-    partes = [f"# Módulo: {nome}"]
+def renderizar_relatorio(nome: str, artefatos: dict, titulo: Optional[str] = None) -> str:
+    partes = [f"# {titulo or f'Módulo: {nome}'}"]
     if "analise" in artefatos:
         partes.append(render_analise(artefatos["analise"]))
     if "especificacao" in artefatos:

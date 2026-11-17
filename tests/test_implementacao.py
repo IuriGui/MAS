@@ -761,3 +761,27 @@ def test_reparo_tipo_repetido_nao_mexe():
                               GeneratedFile(path=b.path, content=_java(pkg, "B"))], notes=[])
     arquivos.reparar_caminhos(g, [a, b])
     assert [f.path for f in g.files] == [a.path, b.path] and g.notes == []
+
+
+# ================================================================ relatório
+def test_relatorio_mostra_relato_de_cada_lote():
+    from mas.relatorio import render_arquivos
+    md = render_arquivos("Código backend", [
+        {"path": "db/V001.sql", "lote": 0, "gerado_por": "ddl.py"},
+        {"path": "A.java", "lote": 1}, {"lote": 1, "notas": ["Compilou.\nErro fora do lote: X"]},
+        {"path": "B.java", "lote": 2},
+    ])
+    assert "3 arquivo(s) em 3 lote(s)" in md
+    assert "**Lotes sem relato do implementador:** 2." in md
+    assert "> Compilou.\n> Erro fora do lote: X" in md
+    assert "Gerado em código por `ddl.py`" in md
+
+
+def test_relatorio_da_retomada_inclui_backend_e_base_tem_relatorio(tmp_path):
+    processar_modulo("Usuários", "d", agentes=agentes(), saida_dir=str(tmp_path))
+    processar_modulo("Usuários", "d", de="implementador_frontend", agentes=agentes(),
+                     saida_dir=str(tmp_path))
+    rel = (tmp_path / "usuarios" / "relatorio.md").read_text()
+    assert "## Código backend" in rel and "## Código frontend" in rel
+    base = (tmp_path / "usuarios" / "base" / "relatorio.md").read_text()
+    assert base.startswith("# Base compartilhada") and "Relato do implementador" in base

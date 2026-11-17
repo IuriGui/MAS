@@ -1,16 +1,291 @@
 # Alterações
 
-- [Rodada 7 — Organização dos arquivos](#rodada-7--organização-dos-arquivos)
-- [Rodada 6 — Implementadores no sandbox Docker](#rodada-6--implementadores-no-sandbox-docker)
-- [Rodada 5 — Regeneração do módulo e aplicação no ar](#rodada-5--regeneração-do-módulo-e-aplicação-no-ar)
-- [Rodada 4 — Execução completa, compilação do código gerado e correções](#rodada-4--execução-completa-compilação-do-código-gerado-e-correções)
-- [Rodada 3 — Limites contra repetição sem fim e primeira execução real](#rodada-3--limites-contra-repetição-sem-fim-e-primeira-execução-real)
-- [Rodada 2 — Planejador e Implementadores (backend e frontend)](#rodada-2--planejador-e-implementadores-backend-e-frontend)
-- [Rodada 1 — Integração do Arquiteto-chefe e execução por projeto](#rodada-1--integração-do-arquiteto-chefe-e-execução-por-projeto)
+- [Relato 8. Execução com sandbox: três erros documentados, não corrigidos](#relato-8-execução-com-sandbox-três-erros-documentados-não-corrigidos)
+- [Relato 7. Organização dos arquivos](#relato-7-organização-dos-arquivos)
+- [Relato 6. Implementadores no sandbox Docker](#relato-6-implementadores-no-sandbox-docker)
+- [Relato 5. Regeneração do módulo e aplicação no ar](#relato-5-regeneração-do-módulo-e-aplicação-no-ar)
+- [Relato 4. Execução completa, compilação do código gerado e correções](#relato-4-execução-completa-compilação-do-código-gerado-e-correções)
+- [Relato 3. Limites contra repetição sem fim e primeira execução real](#relato-3-limites-contra-repetição-sem-fim-e-primeira-execução-real)
+- [Relato 2. Planejador e Implementadores (backend e frontend)](#relato-2-planejador-e-implementadores-backend-e-frontend)
+- [Relato 1. Integração do Arquiteto-chefe e execução por projeto](#relato-1-integração-do-arquiteto-chefe-e-execução-por-projeto)
 
 ---
 
-## Rodada 7 — Organização dos arquivos
+## Relato 8. Execução com sandbox: três erros documentados, não corrigidos
+
+Data: 16/11/2026. Commit `c00c820`, módulo Users, a partir do backup `impl_f3`.
+Este relato registra os erros e as correções a fazer; nada foi alterado no
+código gerado. No pipeline, só o relatório mudou (ver "Onde ver o relato dos
+agentes").
+
+### Execução
+
+| | Lotes | Tentativas | Tokens (entrada / saída) | Tempo |
+|---|---|---|---|---|
+| Base do backend | 4 | 4 | 5,40 mi / 101 mil | 20 min |
+| Base do frontend | 4 | 4 | 4,11 mi / 55 mil | 11 min |
+| Backend de Users | 11 | 11 | 16,58 mi / 178 mil | 50 min |
+| Frontend de Users | 3 | 3 | 7,31 mi / 87 mil | 17 min |
+| **Total** | 22 | 22 | **33,4 mi / 421 mil** | 98 min |
+
+Os números da base do backend (5.395.916 / 100.991 tokens, 1.187 s) foram lidos
+do `base/metricas.json` antes de a execução da base do frontend sobrescrevê-lo;
+hoje o arquivo só tem a base do frontend.
+
+O que funciona (conferido fora do pipeline):
+- o backend compila (`mvn test-compile`) e os 30 testes passam com PostgreSQL;
+- a aplicação sobe (com a configuração gerada, ver abaixo);
+- as chamadas das telas do frontend batem com os endpoints do backend (conferido
+  lendo o código: a aplicação do frontend não abre, ver erro 2);
+- com o seed de teste (`teste_local/`), o login e as listagens de usuários e
+  papéis funcionam pela API.
+
+Para testar à mão: `docker compose -f teste_local/compose.yml up` sobe banco,
+backend, frontend e um administrador de teste (`teste_local/seed_admin.sql`),
+sem alterar o código em `saida/`.
+
+### Erro 1: a aplicação não usa as migrations
+
+A base gravou no `application.yml`:
+
+```yaml
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: update      # o Hibernate cria/altera as tabelas
+  flyway:
+    enabled: false          # V001__users.sql nunca é aplicada
+```
+
+Com isso, o schema gerado a partir do modelo de dados (`mas/codigo/ddl.py`) é
+ignorado, e as tabelas saem das entidades JPA. Ligando o Flyway com o Hibernate
+só validando (`--spring.flyway.enabled=true --spring.jpa.hibernate.ddl-auto=validate`),
+a aplicação não sobe:
+
+```
+Schema-validation: missing column [deleted_at] in table [password_reset_tokens]
+```
+
+**Causa:** a `BaseEntity` (`common/entity/BaseEntity.java`, `@MappedSuperclass`
+herdada pelas 7 entidades de Users) mapeia seis colunas para toda tabela:
+
+| Coluna | Na `BaseEntity` | Na migration |
+|---|---|---|
+| `id`, `tenant_id`, `created_at`, `updated_at` | sim | em todas as 7 tabelas |
+| `deleted_at` | sim | só em `users` e `roles` |
+| `version` (`@Version`) | sim | em nenhuma |
+
+O Planejador e o Implementador da base não sabem quais colunas *toda* tabela
+tem: a base é gerada antes dos módulos, e as convenções do PROJECT CONTEXT
+citam soft delete e versionamento sem dizer onde. O relato do lote 2 da base
+diz isso abertamente ("`BaseEntity.java`: MappedSuperclass providing […]
+deleted_at (soft-delete), and optimistic locking version counter").
+
+Os dois erros vieram de lotes diferentes. O `application.yml` foi escrito no
+lote 1 da base, já com Flyway desligado e `ddl-auto: update`, antes de a
+`BaseEntity` existir (lote 2). Como nenhum arquivo fora do lote é mantido, ele
+não foi alterado depois. O relato do lote 1 não menciona a escolha, e o
+histórico do agente não foi guardado (LangSmith desligado), então o motivo não
+é conhecido. Na base anterior (backup `impl_f3`), o mesmo arquivo tinha
+`ddl-auto: validate` e Flyway ligado. Com o Hibernate criando o schema, o
+desencontro da `BaseEntity` nunca apareceu: build e testes passam porque o
+schema bate com as entidades, e nenhuma validação em código reprova o Flyway
+desligado.
+
+É o mesmo desencontro do relato 5 (correção manual nº 1, migration `V900`).
+Naquela vez ele foi corrigido à mão no código; a base foi regenerada nesta
+execução e o erro voltou.
+
+### Correção do erro 1 (não aplicada)
+
+**No código gerado.** Já provada numa cópia do backend, fora de `saida/`:
+compila, sobe com Flyway ligado e `ddl-auto=validate` num banco limpo, e os 30
+testes passam.
+
+1. `BaseEntity`: deixar só `id`, `tenant_id`, `created_at` e `updated_at`;
+   remover `deletedAt`, `version` e os métodos `isDeleted`, `markDeleted` e
+   `restore`.
+2. `UserEntity` e `RoleEntity`: receber `deleted_at` com
+   `getDeletedAt`/`setDeletedAt`, `isDeleted`, `markDeleted` e `restore`, que
+   são os usados pelos serviços, repositórios e testes de Users.
+3. `application.yml`: `flyway.enabled: true` e `ddl-auto: validate`.
+
+**No pipeline.** Para o erro não voltar na próxima geração:
+
+1. **Contrato de colunas comuns:** a mensagem do Planejador e do Implementador da
+   base informa as colunas que toda tabela tem (`id` mais as `colunas_base` das
+   convenções). A `@MappedSuperclass` mapeia só essas, e soft delete,
+   versionamento e afins ficam na entidade cuja tabela tem a coluna.
+2. **Validação da classe base:** reprovar `@MappedSuperclass` que mapeie coluna
+   fora do contrato, lendo `@Column(name)` ou convertendo o nome do campo para
+   snake_case e ignorando estáticos e `@Transient`.
+3. **Schema só pelas migrations:**
+   - no prompt, proibir desligar Flyway/Liquibase ou usar `ddl-auto` diferente de
+     `validate`/`none`;
+   - na validação, reprovar `ddl-auto` `update`/`create`/`create-drop` e
+     `flyway|liquibase.enabled: false` em YAML, `.properties` ou código, como
+     `@SpringBootTest(properties=...)`.
+4. **Verificação final:** depois do backend de cada módulo, empacotar e subir a
+   aplicação com Flyway ligado e `ddl-auto=validate` num banco limpo. Registrar o
+   resultado no `6_backend.json`.
+
+Os quatro itens foram implementados e testados sem LLM na branch
+`contexto-enxuto` (commit `f6b89a8`), que ficou fora da linha principal junto
+com outras mudanças de custo que não deram resultado. Não chegaram a rodar com
+o Gemini.
+
+### Erro 2: o frontend não abre
+
+O Vite serve o `index.html`, mas a aplicação quebra ao carregar:
+
+```
+[vite] Internal server error: Failed to resolve import "../modules/catalog/routes"
+from "src/router/AppRoutes.tsx". Does the file exist?
+```
+
+**Causa:** o `src/router/AppRoutes.tsx` da base (lote 4) importa
+estaticamente as rotas dos 8 módulos do ERP (`users`, `catalog`, `customers`,
+`inventory`, `audit`, `purchasing`, `sales`, `finance`). Só `users` existe. O
+plano citava `users`, `catalog` e `inventory`, e o agente ampliou para os 8. A
+`Sidebar.tsx` (lote 3) também lista os 8 módulos, mas como links fixos, sem
+import; ela compila e leva à página 404 nos módulos que faltam.
+
+Os dois agentes viram o erro e o ignoraram, como o prompt permite. Os resumos
+estão no campo `notas` dos manifestos:
+
+- **Base, lote 4** (`base/7_frontend.json`): "The only reported compilation
+  errors are TS2307 missing module declarations for module route files
+  (`../modules/*/routes`) that are planned for subsequent batches and have not
+  yet been generated, as expected by the batch verification rules. Validated
+  that upon creating mock route declarations for the 8 planned modules,
+  `npx tsc --noEmit` succeeds with exit code 0." Os stubs foram criados fora do
+  lote e apagados pela `ColetaSandbox`, então o import ficou quebrado.
+- **Users, lote 3** (`users/7_frontend.json`): "The only outstanding compiler
+  errors are external imports in `src/router/AppRoutes.tsx` for modules not yet
+  created […]. These will resolve automatically as subsequent modules are
+  generated." Para testar o Vite, o agente pediu só os próprios arquivos
+  (`UserProfilePage.tsx`, `routes.tsx`) e nunca carregou a aplicação a partir do
+  `main.tsx`.
+
+Por que passou:
+
+1. **Regra do prompt:** `MODO_SANDBOX` (`mas/agentes/prompts.py`) diz "errors
+   caused only by files that are planned but not generated yet (later batches
+   or modules) are expected: ignore them". O "or modules" cobre qualquer módulo
+   do projeto, inclusive os que não serão gerados nesta execução.
+2. **Base amarrada a todos os módulos:** com imports estáticos, o frontend só
+   abre quando os 8 módulos existirem. No backend isso não acontece, porque o
+   Spring encontra os controllers pelo component scan.
+3. **Nenhuma verificação do frontend inteiro:** a validação em código não roda
+   `tsc` nem o build no fim do módulo, e nenhum agente carregou a aplicação.
+
+### Correção do erro 2 (não aplicada)
+
+**No código gerado.** Basta o `AppRoutes.tsx`, porque o `modules/users/routes.tsx`
+já exporta `RouteObject[]` como `default` e é compatível com descoberta:
+
+```ts
+const modulos = import.meta.glob<{ default?: RouteObject[] }>(
+  '../modules/*/routes.tsx', { eager: true });
+const allModuleRoutes = Object.values(modulos).flatMap((m) => m.default ?? []);
+```
+
+Opcional: a `Sidebar` mostrar só os módulos que existem, pelo mesmo mecanismo.
+
+**No pipeline:**
+
+1. **Descoberta em vez de import:** o plano e o prompt da base pedem que o
+   roteador e o menu juntem os módulos por `import.meta.glob` (cada módulo
+   exporta `routes.tsx` e, para o menu, um `nav.ts`). A base não importa nenhum
+   módulo pelo nome, e um módulo novo aparece sem editar arquivo da base.
+2. **Regra do prompt:** trocar "later batches or modules" por "later batches of
+   this same module". Um erro em arquivo da base ou de outro módulo passa a ser
+   reportado, não ignorado.
+3. **Verificação final do frontend:** depois do frontend de cada módulo, rodar
+   `npm run build` (`tsc` mais o build do Vite a partir do `main.tsx`) e
+   registrar o resultado no `7_frontend.json`, como a verificação final do
+   backend.
+
+Criar arquivos vazios de rota para cada módulo na base faria a aplicação abrir,
+mas o módulo teria de sobrescrever um arquivo da base, o que contraria a regra
+de não mexer fora do lote, e o menu continuaria com links para módulos que não
+existem.
+
+### Erro 3: o bloqueio por tentativas de login não funciona (FR03)
+
+O requisito pede bloquear a conta por 15 minutos depois de 5 senhas erradas. O
+agente do lote 11 do backend de Users avisou no relato, como problema fora do
+lote:
+
+> In `AuthenticationService.java` (from batch 10/11), `login(...)` is annotated
+> with `@Transactional` without specifying `noRollbackFor = {BadCredentialsException.class,
+> LockedException.class}`. Consequently, throwing `BadCredentialsException` or
+> `LockedException` on failed credentials rolls back the database transaction
+> […], discarding the updated `failed_login_attempts` counter.
+
+Confirmado com a aplicação no ar (`teste_local/`): depois de 6 logins com senha
+errada, `failed_login_attempts` continua 0, o status continua `ACTIVE`, e o
+login com a senha certa entra. O teste de bloqueio gerado
+(`AuthenticationIntegrationTest`) parte de um usuário já `LOCKED`, sem errar a
+senha cinco vezes, e por isso passa.
+
+**Por que passou:** o prompt manda o agente reportar o problema fora do lote na
+mensagem final, e ele reportou, mas o pipeline só guarda essa mensagem no
+manifesto. Ninguém lê o aviso nem reabre o lote 10. Além disso, o lote 10, que
+gerou o `AuthenticationService`, terminou sem relato nenhum.
+
+### Correção do erro 3 (não aplicada)
+
+**No código gerado:** em `AuthenticationService.login`, gravar o contador
+numa transação própria (`Propagation.REQUIRES_NEW`) ou usar
+`@Transactional(noRollbackFor = {BadCredentialsException.class, LockedException.class})`.
+Acrescentar um teste que erra a senha cinco vezes e espera 423.
+
+**No pipeline:**
+
+1. **Problemas fora do lote como dado, não texto:** o agente devolve os
+   problemas que achou fora do lote numa lista separada (arquivo e descrição),
+   e o pipeline os junta no manifesto.
+2. **Destino desses problemas:** um problema em arquivo de lote anterior do
+   mesmo módulo reabre aquele lote com o aviso na mensagem. Os demais vão para
+   os alertas de revisão humana, impressos no fim da execução junto com os
+   alertas da especificação.
+3. **Lote sem relato:** registrar como alerta (hoje só aparece no relatório).
+
+### Onde ver o relato dos agentes
+
+Cada Implementador termina o lote com uma mensagem: o que gerou, o que
+verificou e os problemas que achou. O pipeline guarda essa mensagem no campo
+`notas` do manifesto (`6_backend.json`, `7_frontend.json`). Antes, o relatório
+só a mostrava como uma lista corrida, só do frontend quando a execução era
+retomada com `--de implementador_frontend`, e nunca para a base.
+
+Mudança feita (`mas/relatorio.py`, `mas/pipeline/modulo.py`,
+`mas/pipeline/implementacao.py`):
+
+- o `relatorio.md` de cada módulo tem, em "Código backend" e "Código
+  frontend", a seção **Relato do implementador, por lote**, com os arquivos e
+  a mensagem de cada lote, e destaca os lotes sem relato;
+- na retomada, o relatório inclui o código das etapas que não rodaram de novo;
+- a base ganha o próprio `base/relatorio.md` (plano mais relatos).
+
+Testes: 2 novos em `tests/test_implementacao.py` (111 no total). Os relatórios
+desta execução foram regenerados a partir dos artefatos, sem LLM:
+`saida/sistema/users/relatorio.md` e `saida/sistema/base/relatorio.md`.
+
+### Outras pendências desta execução
+
+- **Administrador inicial:** o pipeline não gera seed, então ninguém consegue
+  entrar na aplicação gerada (mesma lacuna do relato 5, nº 2). Para teste à mão
+  há o `teste_local/seed_admin.sql`, fora do código gerado.
+- **Custo:** o deep agent reenvia o contexto inteiro a cada passo, e a entrada
+  fica 50 a 95 vezes maior que a saída. O que pesa é a parte fixa (system prompt
+  com o PROJECT CONTEXT, instruções das tools e a mensagem do lote, com ~100 mil
+  caracteres em Users), não o histórico.
+
+---
+
+## Relato 7. Organização dos arquivos
 
 Data: 15/11/2026. Não muda o comportamento: os 109 testes passam e os comandos
 do `main.py` são os mesmos (só os caminhos dos exemplos mudaram).
@@ -28,7 +303,7 @@ exemplo duplicado. Agora o código fica todo no pacote `mas/`, dividido por pape
 
 ### Onde foi parar cada arquivo
 
-As rodadas anteriores citam os caminhos antigos.
+Os relatos anteriores citam os caminhos antigos.
 
 | Antes | Agora |
 |---|---|
@@ -69,7 +344,7 @@ Os arquivos removidos continuam no histórico do git (commit `121a11a`).
 
 ---
 
-## Rodada 6 — Implementadores no sandbox Docker
+## Relato 6. Implementadores no sandbox Docker
 
 Data: 14/11/2026. Ainda não executada com o Gemini.
 
@@ -108,7 +383,7 @@ eles. Tudo é destruído no fim, mesmo quando há falha.
 
 ### O que continua igual
 
-O motivo de usar saída estruturada (rodada 2) era **validar antes de aceitar**,
+O motivo de usar saída estruturada (relato 2) era **validar antes de aceitar**,
 e isso foi mantido. Depois de cada tentativa, `ColetaSandbox`
 (`implementacao.py`):
 - colhe do disco os arquivos do lote e aplica `reparar_caminhos`;
@@ -132,13 +407,13 @@ de integração com Docker real, pulado quando não há Docker).
 
 ---
 
-## Rodada 5 — Regeneração do módulo e aplicação no ar
+## Relato 5. Regeneração do módulo e aplicação no ar
 
 Data: 08/10/2026.
 
-### Regeneração com as correções da rodada 4
+### Regeneração com as correções do relato 4
 
-O código do módulo Users foi regenerado com as correções da rodada 4:
+O código do módulo Users foi regenerado com as correções do relato 4:
 assinaturas da base e dependências que não são mais cortadas. A especificação, o
 plano e a base foram reaproveitados.
 
@@ -171,7 +446,7 @@ Log: `saida/execucoes/20261008_regeneracao.log`. O código anterior foi guardado
 
 ### Compilação: antes e depois
 
-| | Rodada 4 | Rodada 5 |
+| | Relato 4 | Relato 5 |
 |---|---|---|
 | Backend, código principal | 14 erros (3 arquivos) | **0 erros** (58 classes) |
 | Backend, testes | (não chegou a compilar) | 7 erros em `UserControllerTest.java` (aridade de construtores de DTO) |
@@ -229,14 +504,14 @@ junto com a compilação.
 
 ---
 
-## Rodada 4 — Execução completa, compilação do código gerado e correções
+## Relato 4. Execução completa, compilação do código gerado e correções
 
 Data: 08/10/2026.
 
 ### Correções antes da execução
 
 - **Reparo de caminho trocado** (`implementacao.reparar_caminhos`): resolve a
-  causa da falha da rodada 3. Quando o modelo escreve a classe `P.X` com o
+  causa da falha do relato 3. Quando o modelo escreve a classe `P.X` com o
   `path` de outro arquivo do lote e `P.X` está faltando, o código corrige o
   `path` antes de validar, sem nova chamada ao modelo. A saída real que falhou
   virou caso de teste (`tests/dados/lote_caminho_trocado.json`).
@@ -253,7 +528,7 @@ Data: 08/10/2026.
 
 ### Segunda execução real (retomada)
 
-A retomada continuou a execução da rodada 3, com `--de planejador`. Os
+A retomada continuou a execução do relato 3, com `--de planejador`. Os
 artefatos 1–4 e os 25 arquivos já aprovados da base foram reaproveitados.
 
 ```
@@ -329,9 +604,9 @@ resultado compila.
 
 ---
 
-## Rodada 3 — Limites contra repetição sem fim e primeira execução real
+## Relato 3. Limites contra repetição sem fim e primeira execução real
 
-Data: 08/10/2026. Projeto versionado com git a partir desta rodada.
+Data: 08/10/2026. Projeto versionado com git a partir deste relato.
 
 ### Problema encontrado
 
@@ -405,7 +680,7 @@ chegaram a rodar.
 
 ---
 
-## Rodada 2 — Planejador e Implementadores (backend e frontend)
+## Relato 2. Planejador e Implementadores (backend e frontend)
 
 Data: 08/10/2026
 
@@ -438,7 +713,7 @@ Requisitos → Esclarecedor → Modelador de dados → Arquiteto de software
 
 São 39 testes novos, todos com agentes falsos e **nenhuma chamada à API do
 Gemini**: 79 testes no total, todos passando. Os agentes novos **não foram
-executados com o Gemini de verdade** nesta rodada.
+executados com o Gemini de verdade** neste relato.
 
 ### Por que saída estruturada, e não as tools de arquivo
 
@@ -600,11 +875,11 @@ o prompt antigo; se o Planejador reclamar deles, regenere-os.
   o roteador importa as rotas de todos os módulos do `build_order`; se um módulo
   falhar, o import dele fica quebrado.
 - Rodar os agentes novos com o Gemini para calibrar os prompts. Isso não foi
-  feito nesta rodada.
+  feito neste relato.
 
 ---
 
-## Rodada 1 — Integração do Arquiteto-chefe e execução por projeto
+## Relato 1. Integração do Arquiteto-chefe e execução por projeto
 
 Data: 08/10/2026
 
