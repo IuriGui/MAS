@@ -1,5 +1,6 @@
 # Alterações
 
+- [Relato 9. Redução de custo por lote: recorte da mensagem, verificação proporcional e medição](#relato-9-redução-de-custo-por-lote-recorte-da-mensagem-verificação-proporcional-e-medição)
 - [Relato 8. Execução com sandbox: quatro erros documentados, não corrigidos](#relato-8-execução-com-sandbox-quatro-erros-documentados-não-corrigidos)
 - [Relato 7. Organização dos arquivos](#relato-7-organização-dos-arquivos)
 - [Relato 6. Implementadores no sandbox Docker](#relato-6-implementadores-no-sandbox-docker)
@@ -8,6 +9,136 @@
 - [Relato 3. Limites contra repetição sem fim e primeira execução real](#relato-3-limites-contra-repetição-sem-fim-e-primeira-execução-real)
 - [Relato 2. Planejador e Implementadores (backend e frontend)](#relato-2-planejador-e-implementadores-backend-e-frontend)
 - [Relato 1. Integração do Arquiteto-chefe e execução por projeto](#relato-1-integração-do-arquiteto-chefe-e-execução-por-projeto)
+
+---
+
+## Relato 9. Redução de custo por lote: recorte da mensagem, verificação proporcional e medição
+
+Data: 16/11/2026. Branch `deep-agents`.
+
+### Por quê
+
+Feito depois de constatado que o gasto continuava alto mesmo com as
+dependências só em assinaturas (relato 8). Nos 3 primeiros lotes do backend
+do Customers:
+
+| Lote | Conteúdo | Entrada | Saída |
+|---|---|---|---|
+| 1 | 5 enums (~400 bytes cada) | 0,76 mi | 2,8 mil |
+| 2 | 3 entidades JPA + validador de CPF/CNPJ | 3,58 mi | 31 mil |
+| 3 | 5 eventos simples | 1,16 mi | — |
+
+Reconstruindo sem LLM o que o agente recebia no lote 3, cada passo levava:
+
+| Parte | Caracteres |
+|---|---|
+| System prompt (PROJECT CONTEXT + regras) | 18.430 |
+| Descrição das 8 ferramentas do deepagents | 10.527 |
+| Mensagem do lote | 154.239 |
+
+Da mensagem, só 1–2% era específico do lote: os 5 arquivos a gerar. O resto
+era o seguinte:
+
+| Parte da mensagem | Caracteres | % |
+|---|---|---|
+| Especificação final inteira | 39.712 | 26% |
+| Arquitetura inteira | 31.114 | 20% |
+| Plano dos 60 arquivos do módulo | 44.098 | 29% |
+| API da base (assinaturas de toda a base) | 21.813 | 14% |
+| Resumo da base | 6.136 | 4% |
+| Migration | 4.883 | 3% |
+
+Isso dá uns 46 mil tokens de parte fixa por passo, reenviados em cada um dos
+~15–60 passos de um lote. Além disso, o agente rodava `mvn clean test-compile`
+e a suíte inteira (75 testes, cada um subindo o Spring) até em lote de enums.
+Os logs inteiros entravam no histórico.
+
+As propostas foram listadas por plano (A–E) e escolhidas pelo usuário: A1–A6,
+B1, B2, B5 e a medição.
+
+### Mudanças
+
+**A1–A5. Recorte da mensagem do lote** (`mas/agentes/mensagens.py`, só no
+sandbox; sem sandbox o agente não lê arquivos e continua com a mensagem
+inteira):
+
+| | Antes | Agora |
+|---|---|---|
+| A1. Plano | os arquivos do módulo em JSON | os do lote completos; os demais uma linha cada (`caminho [tipo]: exports`) |
+| A2. Especificação | inteira | escopo, requisitos citados pelos arquivos do lote e as decisões (`resolved_problems`) que os afetam |
+| A3. Arquitetura | inteira | pacotes; endpoints citados pelos arquivos; serviços públicos, eventos e dependências só para os tipos de arquivo que os usam; decisões dos requisitos citados |
+| A4. Migration | sempre | só em lotes com entidade, repositório, mapper, teste ou tabela |
+| A5. API da base | assinaturas de toda a base | sai; os arquivos da base que o lote usa já vêm nas dependências (o Planejador os lista em `depends_on`) |
+
+Frontend: requisitos, endpoints e telas só os do lote, mais o resto do plano
+em uma linha por arquivo.
+
+**A6. Documentos em disco** (`implementacao.gravar_documentos`): antes do 1º
+lote, o pipeline grava em `<código>/.mas/<módulo>/` a especificação, a
+arquitetura e o plano inteiros, a migration e a API completa da base. A
+mensagem lista os caminhos no container, e o prompt (`MODO_SANDBOX`) diz para
+lê-los só se faltar algo. Os arquivos existem antes da foto de cada lote, e
+por isso a `ColetaSandbox` não os apaga.
+
+**B1. Verificação proporcional** (`mensagens.verificacao_do_lote`): cada lote
+recebe o comando exato de verificação.
+- Lote sem teste: `mvn -q compile 2>&1 | tail -n 40`.
+- Lote com teste: `mvn -q test -Dtest=<classes do lote> 2>&1 | tail -n 60`.
+- Frontend: `npx tsc --noEmit 2>&1 | tail -n 40`.
+- `FEATURE TEST: yes` (subir a aplicação e testar) só para lotes com controller
+  ou página/rotas. Nos demais, o prompt proíbe subir a aplicação.
+
+O prompt proíbe a suíte inteira e o `mvn clean`. Quem roda a suíte agora é o
+pipeline, uma vez, no fim do backend do módulo (`mvn -q test`), e o build do
+frontend (`npm run build`). O resultado fica no manifesto
+(`verificacao_final`) e no `relatorio.md`, e não interrompe a execução.
+
+**B2. Saída curta:** o prompt explica que a saída das ferramentas fica na
+conversa e é reenviada a cada passo. Pede `2>&1 | tail -n 60` (ou um grep dos
+erros) em builds, testes e logs, e que o agente leia só os arquivos de que
+precisa.
+
+**B5. Teto de passos:** `LIMITE_PASSOS_SANDBOX` caiu de 250 para 120 passos do
+grafo (cada ciclo modelo → ferramenta é mais de um passo). Ao estourar, o que
+foi gravado é colhido e validado como antes.
+
+**Limite de lotes por execução:** `LOTES_POR_EXECUCAO` (0 = sem limite) para a
+etapa depois de N lotes aprovados, com o progresso salvo. Serve para medir
+poucos lotes sem gastar o módulo inteiro.
+
+**Medição** (`mas/pipeline/execucao.py`): cada chamada registra, além dos
+tokens:
+- chamadas ao modelo (passos), chamadas de ferramenta e quantas de cada
+  ferramenta;
+- tamanho total e maior saída de ferramenta;
+- tokens lidos de cache, quando o provedor informa (`input_token_details`).
+
+Os números são somados na etapa (`metricas.json`) e guardados por lote no
+manifesto. O `relatorio.md` mostra tudo por lote, e o `metricas.md` ganhou a
+coluna "Chamadas ao modelo".
+
+Também foi corrigida uma perda de dados: quando o limite de passos estourava,
+os tokens daquela chamada não eram contados. Agora o `AgenteSandbox` acompanha
+o grafo por `stream` e, ao estourar, devolve o último estado.
+
+### Medido sem LLM
+
+Tamanho médio da mensagem por lote, em caracteres:
+
+| Módulo | Backend | Frontend |
+|---|---|---|
+| Users | 154.274 → 45.785 (30%) | 99.996 → 23.162 (23%) |
+| Catalog | 202.733 → 60.376 (30%) | 136.760 → 32.715 (24%) |
+| Customers | 168.417 → 49.453 (29%) | 52.535 → 22.643 (43%) |
+
+Nos lotes 4–12 do backend do Customers, a mensagem passa de 150–236 mil para
+35–87 mil caracteres.
+
+Testes: 6 novos (123 no total).
+
+### Resultado com LLM
+
+(a preencher com os lotes 4 a 6 do backend do Customers)
 
 ---
 
@@ -427,9 +558,16 @@ Mudança feita (`mas/metricas.py`, `mas/pipeline/projeto.py`,
   - na retomada, os lotes recomeçavam do 1 e repetiam números no manifesto.
     Agora continuam a numeração ("batch 2/2").
 
-As métricas das etapas de especificação e planejamento de Users e Catalog não
-existem: foram geradas antes do backup, e o `metricas.json` daquelas execuções
-não foi guardado.
+As etapas reaproveitadas do backup `impl_f3` também entram:
+- Arquiteto-chefe (`metricas_contexto.json`);
+- especificação (etapas 1–4) dos 8 módulos;
+- Planejador de Users, Catalog e Inventory.
+
+Os artefatos em `saida/sistema` são idênticos aos do backup. Os números
+ficam em `<modulo>/metricas_backup.json`, separados dos da execução atual, e
+o consolidado soma os dois. A implementação antiga do backup não entra,
+porque aquele código foi refeito. O Planejador da base não tem métricas no
+backup.
 
 Testes: 3 novos (114 no total).
 

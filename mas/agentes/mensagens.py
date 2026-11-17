@@ -136,6 +136,91 @@ def _arquivos(plano_lado: List[PlannedFile]) -> str:
     return json.dumps([f.model_dump() for f in plano_lado], indent=2, ensure_ascii=False)
 
 
+# ------------------------------------------------- recorte por lote (sandbox)
+# A mensagem é reenviada a cada passo do agente; só 1–2% dela era específica
+# do lote (relato 9). No sandbox, cada lote recebe só o que usa, e os documentos
+# inteiros ficam em disco para o agente ler se precisar.
+KINDS_COM_TABELA = {"entity", "repository", "mapper", "test"}
+KINDS_COM_SERVICOS = {"public_api", "service", "config", "test"}
+KINDS_COM_EVENTOS = {"event", "service", "test"}
+KINDS_COM_DEPENDENCIAS = {"service", "public_api", "config", "test"}
+
+
+def _kinds(lote: List[PlannedFile]) -> set:
+    return {f.kind for f in lote}
+
+
+def _reqs_citados(lote: List[PlannedFile]) -> set:
+    return {r for f in lote for r in f.requirements}
+
+
+def _rotas_citadas(lote: List[PlannedFile]) -> set:
+    return {e.strip() for f in lote for e in f.endpoints}
+
+
+def _endpoint_citado(e, citadas: set) -> bool:
+    return f"{e.method} {e.path}" in citadas or e.path in citadas
+
+
+def _simples(nome: str) -> str:
+    return nome.split(".")[-1].split("(")[0].strip()
+
+
+def recorte_especificacao(spec: FinalSpecification, lote: List[PlannedFile]) -> str:
+    """Escopo, requisitos citados pelos arquivos do lote e as decisões que os afetam."""
+    citados = _reqs_citados(lote)
+    reqs = [r.model_dump() for r in
+            list(spec.functional_requirements) + list(spec.non_functional_requirements)
+            if r.id in citados]
+    decisoes = [{"id": p.id, "title": p.title, "adopted_decision": p.adopted_decision}
+                for p in spec.resolved_problems
+                if any(c in (p.requirements_impact or "") for c in citados)]
+    return json.dumps({"module_name": spec.module_name, "final_scope": spec.final_scope,
+                       "requirements_of_this_batch": reqs,
+                       "decisions_affecting_them": decisoes},
+                      indent=2, ensure_ascii=False)
+
+
+def recorte_arquitetura(arq: ModuleArchitecture, lote: List[PlannedFile]) -> str:
+    """Só as partes da arquitetura que os arquivos do lote implementam ou usam."""
+    kinds, citadas = _kinds(lote), _rotas_citadas(lote)
+    exports = {_simples(x) for f in lote for x in f.exports}
+    citados = _reqs_citados(lote)
+    parte: Dict[str, object] = {"module_name": arq.module_name,
+                                "java_package": arq.java_package,
+                                "package_structure": arq.package_structure}
+    endpoints = [e.model_dump() for e in arq.endpoints if _endpoint_citado(e, citadas)]
+    if endpoints:
+        parte["endpoints"] = endpoints
+    servicos = [s.model_dump() for s in arq.public_services
+                if kinds & KINDS_COM_SERVICOS or _simples(s.interface) in exports]
+    if servicos:
+        parte["public_services"] = servicos
+    eventos = [e.model_dump() for e in arq.domain_events
+               if kinds & KINDS_COM_EVENTOS or _simples(e.name) in exports]
+    if eventos:
+        parte["domain_events"] = eventos
+    if kinds & KINDS_COM_DEPENDENCIAS and arq.module_dependencies:
+        parte["module_dependencies"] = [d.model_dump() for d in arq.module_dependencies]
+    decisoes = [d.model_dump() for d in arq.architectural_decisions
+                if any(c in (d.requirement or "") for c in citados)]
+    if decisoes:
+        parte["architectural_decisions"] = decisoes
+    return json.dumps(parte, indent=2, ensure_ascii=False)
+
+
+def resumo_plano(plano_lado: List[PlannedFile], lote: List[PlannedFile]) -> str:
+    """Os outros arquivos do módulo, uma linha cada (os do lote vêm completos no fim)."""
+    no_lote = {f.path for f in lote}
+    return "\n".join(f"- {f.path} [{f.kind}]"
+                     f"{': ' + ', '.join(f.exports) if f.exports else ''}"
+                     for f in plano_lado if f.path not in no_lote) or NO_FILES
+
+
+def usa_ddl(lote: List[PlannedFile]) -> bool:
+    return bool(_kinds(lote) & KINDS_COM_TABELA or any(f.tables for f in lote))
+
+
 def msg_planejador(
     nome: str,
     especificacao: FinalSpecification,
@@ -193,7 +278,30 @@ def msg_implementador_backend(
     i: int,
     n: int,
     api_base: str = "",
+    documentos: str = "",
 ) -> str:
+    """Mensagem de um lote do backend. Com `documentos` (sandbox), vai só o recorte
+    do lote; os documentos inteiros ficam nos caminhos indicados."""
+    if documentos:
+        ddl_lote = (ddl or "(no SQL database)") if usa_ddl(lote) else \
+            "(not needed for this batch; full DDL in the documents above)"
+        return (
+            f"MODE: MODULE\nMODULE: {nome} — batch {i}/{n}\n\n"
+            f"{documentos}\n\n"
+            f"SPECIFICATION — scope and requirements of this batch (JSON):\n"
+            f"{recorte_especificacao(especificacao, lote)}\n\n"
+            f"ARCHITECTURE — parts used by this batch (JSON):\n"
+            f"{recorte_arquitetura(arquitetura, lote)}\n\n"
+            f"MIGRATION (DDL, closed):\n{ddl_lote}\n\n"
+            f"OTHER FILES OF THE MODULE (path [kind]: exports):\n"
+            f"{resumo_plano(plano.backend_files, lote)}\n"
+            f"Implementation notes:\n" + "\n".join(f"- {x}" for x in plano.implementation_notes)
+            + f"\n\nBASE:\n{resumo_base(plano_base, 'backend')}\n\n"
+            f"OTHER MODULES' PUBLIC CODE:\n{externas or NO_FILES}\n\n"
+            f"FILES THIS BATCH DEPENDS ON (public signatures; base files included):\n"
+            f"{dependencias or NO_FILES}\n\n"
+            + _lote(lote)
+        )
     return (
         f"MODE: MODULE\nMODULE: {nome} — batch {i}/{n}\n\n"
         f"FINAL SPECIFICATION (JSON):\n{especificacao.model_dump_json(indent=2)}\n\n"
@@ -222,7 +330,33 @@ def msg_implementador_frontend(
     i: int,
     n: int,
     api_base: str = "",
+    documentos: str = "",
 ) -> str:
+    """Mensagem de um lote do frontend. Com `documentos` (sandbox), só o recorte."""
+    if documentos:
+        citados, rotas = _reqs_citados(lote), _rotas_citadas(lote)
+        no_lote = {f.path for f in lote}
+        reqs = [r.model_dump() for r in
+                list(especificacao.functional_requirements)
+                + list(especificacao.non_functional_requirements) if r.id in citados]
+        endpoints = [e.model_dump() for e in arquitetura.endpoints
+                     if _endpoint_citado(e, rotas)]
+        telas = [s.model_dump() for s in plano.screens
+                 if s.page_file in no_lote or "routes" in _kinds(lote)]
+        return (
+            f"MODE: MODULE\nMODULE: {nome} — batch {i}/{n}\n\n"
+            f"{documentos}\n\n"
+            f"REQUIREMENTS OF THIS BATCH (JSON):\n{json.dumps(reqs, indent=2, ensure_ascii=False)}\n\n"
+            f"API ENDPOINTS USED BY THIS BATCH (JSON):\n"
+            f"{json.dumps(endpoints, indent=2, ensure_ascii=False)}\n\n"
+            f"SCREENS OF THIS BATCH (JSON):\n{json.dumps(telas, indent=2, ensure_ascii=False)}\n\n"
+            f"OTHER FILES OF THE MODULE (path [kind]: exports):\n"
+            f"{resumo_plano(plano.frontend_files, lote)}\n\n"
+            f"BASE:\n{resumo_base(plano_base, 'frontend')}\n\n"
+            f"FILES THIS BATCH DEPENDS ON (public signatures; base files included):\n"
+            f"{dependencias or NO_FILES}\n\n"
+            + _lote(lote)
+        )
     reqs = [r.model_dump() for r in
             list(especificacao.functional_requirements)
             + list(especificacao.non_functional_requirements)]
@@ -275,11 +409,43 @@ def msg_implementador_base(
     )
 
 
-def msg_sandbox(lote: List[PlannedFile], raiz_container: str, ambiente: str) -> str:
+def verificacao_do_lote(lote: List[PlannedFile], raiz_container: str, lado: str) -> str:
+    """Comando de verificação proporcional ao lote, com saída curta (relato 9)."""
+    kinds = _kinds(lote)
+    if lado == "frontend":
+        cmd = f"cd {raiz_container} && npx tsc --noEmit 2>&1 | tail -n 40"
+        testar = bool(kinds & {"page", "routes"})
+    else:
+        testes = [f.path.rsplit("/", 1)[-1].rsplit(".", 1)[0] for f in lote
+                  if f.kind == "test" or "/test/" in f"/{f.path}"]
+        if testes:
+            cmd = (f"cd {raiz_container} && mvn -q test -Dtest={','.join(testes)} "
+                   f"-Dsurefire.failIfNoSpecifiedTests=false 2>&1 | tail -n 60")
+        else:
+            cmd = f"cd {raiz_container} && mvn -q compile 2>&1 | tail -n 40"
+        testar = "controller" in kinds
+    teste = ("FEATURE TEST: yes (this batch has controllers/pages: you may start the "
+             "application and exercise them)" if testar else
+             "FEATURE TEST: no (do not start the application)")
+    return f"VERIFY: {cmd}\n{teste}"
+
+
+def documentos_do_modulo(caminhos: Dict[str, str]) -> str:
+    """Bloco com os documentos inteiros gravados no sandbox (lidos só se preciso)."""
+    if not caminhos:
+        return ""
+    return ("FULL DOCUMENTS (read with read_file only if this message is not enough):\n"
+            + "\n".join(f"- {c} — {d}" for d, c in caminhos.items()))
+
+
+def msg_sandbox(lote: List[PlannedFile], raiz_container: str, ambiente: str,
+                lado: str = "") -> str:
     """Complemento da mensagem de um lote no modo sandbox."""
     caminhos = "\n".join(f"- {raiz_container}/{f.path}" for f in lote)
+    lado = lado or ("frontend" if raiz_container.rstrip("/").endswith("frontend") else "backend")
     return (
         f"\n\nSANDBOX:\nSide root: {raiz_container}\n"
         f"Write exactly these files (absolute paths):\n{caminhos}\n\n"
+        f"{verificacao_do_lote(lote, raiz_container, lado)}\n\n"
         f"Services in the Docker network:\n{ambiente or '- (none)'}"
     )

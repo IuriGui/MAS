@@ -56,4 +56,9 @@ SANDBOX_PORTAS = [int(p) for p in os.environ.get("SANDBOX_PORTAS", "5173").split
                   if p.strip()]
 # Passos do grafo por tentativa no modo sandbox (cada ciclo modelo -> tool são
 # alguns passos). Substitui LIMITE_PASSOS_AGENTE para os Implementadores.
-LIMITE_PASSOS_SANDBOX = max(10, int(os.environ.get("LIMITE_PASSOS_SANDBOX", "250")))
+# Era 250; baixado para limitar o pior caso de custo (relato 9). Ao estourar, o
+# que já foi gravado é colhido e validado do mesmo jeito.
+LIMITE_PASSOS_SANDBOX = max(10, int(os.environ.get("LIMITE_PASSOS_SANDBOX", "120")))
+# Lotes por execução em cada etapa de implementação (0 = sem limite). Ao atingir,
+# a etapa para com os lotes aprovados salvos; uma nova execução retoma dali.
+LOTES_POR_EXECUCAO = max(0, int(os.environ.get("LOTES_POR_EXECUCAO", "0")))

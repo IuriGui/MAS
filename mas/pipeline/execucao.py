@@ -13,13 +13,44 @@ class PipelineError(RuntimeError):
     pass
 
 
-def _tokens(resultado: dict) -> Dict[str, int]:
-    total = {"input_tokens": 0, "output_tokens": 0}
+def _tokens(resultado: dict) -> Dict[str, object]:
+    """Tokens e o que o agente fez numa chamada (passos, ferramentas, cache)."""
+    total: Dict[str, object] = {"input_tokens": 0, "output_tokens": 0,
+                                "cache_read_tokens": 0, "chamadas_modelo": 0,
+                                "chamadas_tool": 0, "saida_tool_chars": 0,
+                                "maior_saida_tool": 0, "tools_por_nome": {}}
     for m in resultado.get("messages", []):
         u = getattr(m, "usage_metadata", None) or {}
         total["input_tokens"] += u.get("input_tokens", 0)
         total["output_tokens"] += u.get("output_tokens", 0)
+        total["cache_read_tokens"] += (u.get("input_token_details") or {}).get("cache_read", 0) or 0
+        tipo = getattr(m, "type", "")
+        if tipo == "ai":
+            total["chamadas_modelo"] += 1
+            for tc in getattr(m, "tool_calls", None) or []:
+                nome = tc.get("name", "?")
+                total["tools_por_nome"][nome] = total["tools_por_nome"].get(nome, 0) + 1
+        elif tipo == "tool":
+            total["chamadas_tool"] += 1
+            tam = len(str(getattr(m, "content", "")))
+            total["saida_tool_chars"] += tam
+            total["maior_saida_tool"] = max(total["maior_saida_tool"], tam)
     return total
+
+
+# campos somados a cada chamada (os demais: tools_por_nome soma por nome,
+# maior_saida_tool guarda o máximo)
+CAMPOS_SOMADOS = ("input_tokens", "output_tokens", "cache_read_tokens", "chamadas_modelo",
+                  "chamadas_tool", "saida_tool_chars")
+
+
+def _acumular(m: dict, tk: Dict[str, object]) -> None:
+    for c in CAMPOS_SOMADOS:
+        m[c] = m.get(c, 0) + tk[c]
+    m["maior_saida_tool"] = max(m.get("maior_saida_tool", 0), tk["maior_saida_tool"])
+    nomes = m.setdefault("tools_por_nome", {})
+    for n, q in tk["tools_por_nome"].items():
+        nomes[n] = nomes.get(n, 0) + q
 
 
 def executar_agente(
@@ -57,8 +88,10 @@ def executar_agente(
             resultado = _invocar(agente, prompt, nome_etapa, modulo, tentativa,
                                  limite_passos)
         except GraphRecursionError:
-            print(f"  [{nome_etapa}] tentativa {tentativa}: limite de {limite_passos} passos")
-            resultado = {"messages": []}
+            resultado = {"messages": [], "limite_passos": True}
+        if resultado.get("limite_passos"):
+            print(f"  [{nome_etapa}] tentativa {tentativa}: limite de {limite_passos} passos",
+                  flush=True)
         if extrair:
             obj_tentativa = extrair(resultado)
         else:
@@ -69,8 +102,7 @@ def executar_agente(
                                              "input_tokens": 0, "output_tokens": 0})
         m["tentativas"] += 1
         m["segundos"] = round(m["segundos"] + time.time() - t0, 2)
-        m["input_tokens"] += tk["input_tokens"]
-        m["output_tokens"] += tk["output_tokens"]
+        _acumular(m, tk)
 
         if obj_tentativa is None:
             erros = ["A resposta não seguiu o formato estruturado exigido (JSON do schema)."]

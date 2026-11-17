@@ -893,3 +893,99 @@ public class Evento {
     r = assinaturas("x/Evento.java", src)
     assert "public UUID getId()" in r and "getInterno" not in r
     assert "public Evento(UUID id) { ... }" in r
+
+
+# ================================================================ recorte por lote (relato 9)
+def _artefatos_users():
+    from tests.fakes import arquitetura, plano as plano_f, spec as spec_f
+    return spec_f(), arquitetura(), plano_f()
+
+
+def test_recorte_mensagem_backend_leva_so_o_lote():
+    from mas.agentes import mensagens as M
+    spec_, arq_, plano_ = _artefatos_users()
+    lote = plano_.backend_files[:1]
+    completa = M.msg_implementador_backend("U", spec_, arq_, plano_, None, "CREATE TABLE x();",
+                                           "", "", lote, 1, 2)
+    recorte = M.msg_implementador_backend("U", spec_, arq_, plano_, None, "CREATE TABLE x();",
+                                          "", "", lote, 1, 2, documentos="FULL DOCUMENTS: ...")
+    assert len(recorte) < len(completa)
+    assert "FULL DOCUMENTS" in recorte and "IMPLEMENTATION PLAN — backend files" not in recorte
+    assert "OTHER FILES OF THE MODULE" in recorte
+    assert M.MARCADOR_LOTE in recorte                       # o lote continua completo
+    outros = [f.path for f in plano_.backend_files[1:]]
+    assert all(p in recorte for p in outros)                # uma linha cada
+
+
+def test_recorte_especificacao_so_requisitos_citados():
+    from mas.agentes import mensagens as M
+    from mas.schemas import PlannedFile
+    spec_, _, _ = _artefatos_users()
+    rid = spec_.functional_requirements[0].id
+    lote = [PlannedFile(path="a/A.java", kind="service", purpose="x", exports=["A"],
+                        depends_on=[], tables=[], endpoints=[], requirements=[rid])]
+    r = json.loads(M.recorte_especificacao(spec_, lote))
+    assert [x["id"] for x in r["requirements_of_this_batch"]] == [rid]
+    assert "consolidated_specification" not in r
+
+
+def test_verificacao_proporcional_ao_lote():
+    from mas.agentes import mensagens as M
+    from mas.schemas import PlannedFile
+    def pf(path, kind):
+        return PlannedFile(path=path, kind=kind, purpose="x", exports=[], depends_on=[],
+                           tables=[], endpoints=[], requirements=[])
+    so_codigo = M.verificacao_do_lote([pf("src/main/java/a/E.java", "event")], "/w/backend", "backend")
+    assert "mvn -q compile" in so_codigo and "| tail -n" in so_codigo
+    assert "FEATURE TEST: no" in so_codigo
+    com_teste = M.verificacao_do_lote([pf("src/test/java/a/ATest.java", "test"),
+                                       pf("src/main/java/a/C.java", "controller")],
+                                      "/w/backend", "backend")
+    assert "-Dtest=ATest" in com_teste and "FEATURE TEST: yes" in com_teste
+    front = M.verificacao_do_lote([pf("src/modules/u/pages/P.tsx", "page")], "/w/frontend", "frontend")
+    assert "tsc --noEmit" in front and "FEATURE TEST: yes" in front
+
+
+def test_sandbox_grava_documentos_e_mede_passos(tmp_path):
+    from tests.test_sandbox import sandbox_falso
+    from mas.agentes.fabrica import AgenteSandbox
+    codigo = tmp_path / "usuarios" / "codigo"
+    back = sandbox_falso(codigo)
+    res = processar_modulo("Usuários", "d", agentes=agentes(back=back, front=sandbox_falso(codigo)),
+                           saida_dir=str(tmp_path))
+    docs = codigo / ".mas" / "usuarios"
+    assert (docs / "especificacao.json").exists() and (docs / "plano.json").exists()
+    msg = back.chamadas[-1]
+    assert "FULL DOCUMENTS" in msg and "/workspace/.mas/usuarios/plano.json" in msg
+    assert "VERIFY:" in msg
+    assert res["metricas"]["implementador_backend"]["chamadas_modelo"] == 0  # grafo falso
+
+
+def test_lotes_por_execucao_para_e_retoma(tmp_path, monkeypatch):
+    monkeypatch.setattr(implementacao, "LOTES_POR_EXECUCAO", 1)
+    with pytest.raises(PipelineError, match="LOTES_POR_EXECUCAO"):
+        processar_modulo("Usuários", "d", agentes=agentes(), saida_dir=str(tmp_path))
+    progresso = tmp_path / "usuarios" / "implementador_backend.progresso.json"
+    assert {m["lote"] for m in json.loads(progresso.read_text())} == {1}
+    monkeypatch.setattr(implementacao, "LOTES_POR_EXECUCAO", 0)
+    res = processar_modulo("Usuários", "d", de="implementador_backend", agentes=agentes(),
+                           saida_dir=str(tmp_path))
+    assert res["metricas"]["implementador_backend"]["lotes"] == 2
+
+
+def test_agente_sandbox_guarda_estado_ao_estourar_passos():
+    from langchain_core.messages import AIMessage
+    from langgraph.errors import GraphRecursionError
+    from mas.agentes.fabrica import AgenteSandbox
+    from mas.pipeline.execucao import _tokens
+
+    class Grafo:
+        def stream(self, entrada, config=None, stream_mode=None):
+            yield {"messages": [AIMessage(content="a", usage_metadata={
+                "input_tokens": 100, "output_tokens": 5, "total_tokens": 105})]}
+            raise GraphRecursionError("limite")
+        def invoke(self, *a, **k):
+            raise AssertionError("não deveria usar invoke")
+
+    r = AgenteSandbox(Grafo(), None).invoke({"messages": []})
+    assert r["limite_passos"] and _tokens(r)["input_tokens"] == 100

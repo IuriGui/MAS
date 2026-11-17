@@ -203,7 +203,10 @@ def _citacao(texto: str) -> str:
 def render_arquivos(titulo: str, manifesto: List[dict]) -> str:
     """Arquivos gerados e o relato do implementador (última mensagem) de cada lote."""
     lotes: Dict[str, dict] = {}
+    finais = [m["verificacao_final"] for m in manifesto if "verificacao_final" in m]
     for m in manifesto:
+        if "verificacao_final" in m:
+            continue
         lote = lotes.setdefault(str(m.get("lote", "—")),
                                 {"arquivos": [], "notas": [], "gerado_por": None,
                                  "metricas": None})
@@ -234,7 +237,22 @@ def render_arquivos(titulo: str, manifesto: List[dict]) -> str:
             gasto = (f"\n\nGasto: {tokens(mt['input_tokens'])} tokens de entrada, "
                      f"{tokens(mt['output_tokens'])} de saída, {tempo(mt['segundos'])}, "
                      f"{int(mt['tentativas'])} tentativa(s).")
+            if mt.get("chamadas_modelo"):
+                ferramentas = ", ".join(f"{n} {q}" for n, q in sorted(
+                    (mt.get("tools_por_nome") or {}).items(), key=lambda x: -x[1]))
+                gasto += (f" {int(mt['chamadas_modelo'])} chamadas ao modelo; "
+                          f"{int(mt.get('chamadas_tool', 0))} de ferramentas"
+                          f"{' (' + ferramentas + ')' if ferramentas else ''}; "
+                          f"saída das ferramentas: {int(mt.get('saida_tool_chars', 0)):,} "
+                          f"caracteres".replace(",", "."))
+                if mt.get("cache_read_tokens"):
+                    gasto += f"; em cache: {tokens(mt['cache_read_tokens'])}"
+                gasto += "."
         partes.append(f"#### Lote {n}\n\nArquivos: {arquivos}{gasto}\n\n{corpo}")
+    for f in finais:
+        partes.append(f"### Verificação final (pipeline)\n\n`{f['comando']}`: "
+                      f"{'ok' if f.get('ok') else 'FALHOU'} (código {f.get('exit_code')})"
+                      f"\n\n```\n{(f.get('saida') or '').strip()[-2000:]}\n```")
     return "\n\n".join(partes)
 
 

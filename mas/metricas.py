@@ -19,6 +19,7 @@ PARTE_DA_ETAPA = {
     "requisitos": "especificação",
     "esclarecedor": "especificação",
     "modelador_dados": "especificação",
+    "esclarecedor_consulta": "especificação",
     "arquiteto_software": "especificação",
     "planejador": "planejamento",
     "planejador_base": "planejamento",
@@ -27,7 +28,8 @@ PARTE_DA_ETAPA = {
     "implementador_frontend": "frontend",
     "implementador_frontend_base": "frontend",
 }
-CAMPOS = ("input_tokens", "output_tokens", "segundos", "tentativas", "lotes")
+CAMPOS = ("input_tokens", "output_tokens", "segundos", "tentativas", "lotes",
+          "chamadas_modelo", "cache_read_tokens")
 
 
 def _vazio() -> Dict[str, float]:
@@ -52,14 +54,27 @@ def _ler(caminho: Path) -> dict:
     return json.loads(caminho.read_text(encoding="utf-8")) if caminho.exists() else {}
 
 
+# metricas_backup.json: etapas reaproveitadas de execuções anteriores (artefatos
+# iguais), gravadas à parte para não se misturarem com as da execução atual
+ARQUIVOS = ("metricas.json", "metricas_backup.json")
+
+
+def _ler_pasta(pasta: Path) -> Dict[str, dict]:
+    """Etapas de todos os arquivos de métricas da pasta, somadas por parte."""
+    partes: Dict[str, dict] = {}
+    for arq in ARQUIVOS:
+        for parte, m in por_parte(_ler(pasta / arq)).items():
+            _somar(partes.setdefault(parte, _vazio()), m)
+    return partes
+
+
 def consolidar(pasta: Path, modulos: List[str]) -> dict:
     """Linhas: Arquiteto-chefe, base e cada módulo com metricas.json; mais o total."""
     linhas = []
-    fontes = [("Arquiteto-chefe", pasta / "metricas_contexto.json"),
-              ("Base compartilhada", pasta / "base" / "metricas.json")]
-    fontes += [(m, pasta / slugify(m) / "metricas.json") for m in modulos]
-    for nome, arq in fontes:
-        partes = por_parte(_ler(arq))
+    fontes = [("Arquiteto-chefe", por_parte(_ler(pasta / "metricas_contexto.json"))),
+              ("Base compartilhada", _ler_pasta(pasta / "base"))]
+    fontes += [(m, _ler_pasta(pasta / slugify(m))) for m in modulos]
+    for nome, partes in fontes:
         if not partes:
             continue
         total = _vazio()
@@ -94,16 +109,19 @@ def tokens(n: float) -> str:
 
 def _celulas(m: dict) -> str:
     return (f"{tokens(m['input_tokens'])} | {tokens(m['output_tokens'])} | "
-            f"{tempo(m['segundos'])} | {int(m['tentativas'])} | {int(m['lotes']) or '—'}")
+            f"{tempo(m['segundos'])} | {int(m['tentativas'])} | {int(m['lotes']) or '—'} | "
+            f"{int(m.get('chamadas_modelo', 0)) or '—'}")
 
 
 def render_metricas(cons: dict, titulo: str = "Métricas do projeto") -> str:
-    cab = "| Entrada | Saída | Tempo | Tentativas | Lotes |"
-    sep = "|---|---|---|---|---|"
+    cab = "| Entrada | Saída | Tempo | Tentativas | Lotes | Chamadas ao modelo |"
+    sep = "|---|---|---|---|---|---|"
     out = [f"# {titulo}", "",
            "Tokens de entrada e de saída somados de todas as chamadas aos agentes. "
            "Tempo: dentro das chamadas (inclui build, testes e servidor no sandbox). "
-           "Tentativas: chamadas ao agente (uma por lote quando passa de primeira).", "",
+           "Tentativas: chamadas ao agente (uma por lote quando passa de primeira). "
+           "Chamadas ao modelo: passos do agente, registrados desde o relato 9 "
+           "(\"—\" nas execuções anteriores).", "",
            "## Total", "", "| Parte " + cab, "|---" + sep]
     tot = cons["total"]
     for parte in PARTES:

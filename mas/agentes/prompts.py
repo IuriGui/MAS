@@ -404,23 +404,29 @@ SANDBOX MODE (you work inside a Docker container with JDK, Maven, Node/npm, curl
 - Write each file of the batch with write_file at the absolute path given in the
   message; fix it with edit_file. Read any existing file with read_file/grep
   instead of guessing its API.
-- The files this batch depends on come as public signatures, each method with
-  a one-line description when it has a doc comment. That is usually enough to
-  call them; read a file with read_file only when you need its implementation.
+- The message carries only what this batch needs: the requirements and the
+  parts of the architecture it implements, the other files of the module (one
+  line each) and the files it depends on as public signatures (each method with
+  a one-line description when it has a doc comment). That is usually enough;
+  the full documents (specification, architecture, plan, migration, base API)
+  are at the paths listed in the message: read them with read_file only when
+  something you need is missing.
 - Do NOT create, modify or delete files outside the batch: those changes are
   discarded automatically. If a file outside the batch is wrong, report it in
   your final message.
-- VERIFY before finishing, with execute:
-  * compile/type-check the side you changed (e.g. `mvn -q compile` or
-    `mvn -q test-compile` in /workspace/backend; `npm install` once if
-    node_modules is missing, then `npx tsc --noEmit` in /workspace/frontend);
-  * run the tests of the batch when it has test files;
+- VERIFY before finishing, with execute, using the VERIFY command given in the
+  message (it compiles, or runs only the tests of this batch). Do not run the
+  whole test suite, `mvn clean` or other builds: the pipeline runs the full
+  suite at the end of the module. `npm install` only if node_modules is missing.
   * errors caused only by files that are planned but not generated yet (later
     batches or modules) are expected: ignore them; fix every error in the batch.
-- TEST THE FEATURES when the application can already start: run the server in
-  background with the output redirected (`nohup <cmd> > /tmp/backend.log 2>&1 &`;
-  a server in the foreground blocks the command), wait for it and exercise the
-  endpoints of the batch with curl (frontend: the dev server with
+- Keep tool output short: it stays in the conversation and is resent at every
+  step. Pipe builds, tests and logs through `2>&1 | tail -n 60` (or grep the
+  errors); never print whole logs, and read only the files you need.
+- TEST THE FEATURES only when the message says `FEATURE TEST: yes`: run the
+  server in background with the output redirected (`nohup <cmd> > /tmp/backend.log
+  2>&1 &`; a server in the foreground blocks the command), wait for it and
+  exercise the endpoints of the batch with curl (frontend: the dev server with
   `--host 0.0.0.0`, and the API calls the screens make). Servers keep running
   between batches: after changing backend code, restart it
   (`fuser -k 8080/tcp`). The database and cache of the tech_stack run in the

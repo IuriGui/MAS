@@ -26,8 +26,9 @@ from mas.codigo.assinaturas import assinaturas
 from mas.codigo.coleta import ColetaSandbox
 from mas.codigo.ddl import gerar_ddl, usa_sql
 from mas.config import (IMPL_LIMITE_CONTEXTO, IMPL_LOTE, LIMITE_PASSOS_AGENTE,
+                        LOTES_POR_EXECUCAO,
                         LIMITE_PASSOS_SANDBOX, MAX_TENTATIVAS)
-from mas.pipeline.execucao import PipelineError, executar_agente
+from mas.pipeline.execucao import CAMPOS_SOMADOS, PipelineError, executar_agente
 from mas.relatorio import ler_manifestos, renderizar_relatorio
 from mas.schemas import (FinalSpecification, ImplementationPlan, ModuleArchitecture,
                          ModuleDataModel, PlannedFile, ProjectContext)
@@ -193,7 +194,7 @@ def executar_lotes(
         if sandbox is not None:
             coleta = ColetaSandbox(sandbox.host_dir, raiz, lote)
             msg += mensagens.msg_sandbox(lote, sandbox.caminho_no_container(raiz),
-                                         getattr(agente, "ambiente", ""))
+                                         getattr(agente, "ambiente", ""), raiz.name)
         gerados, erros = executar_agente(
             etapa, agente, msg, lambda g: validacao.validar_arquivos(g, lote, k),
             metricas, max_tentativas, modulo=modulo,
@@ -217,12 +218,22 @@ def executar_lotes(
             manifesto.append({"lote": i, "notas": gerados.notes})
         metricas[etapa]["lotes"] = metricas[etapa].get("lotes", 0) + 1
         depois = metricas[etapa]
-        manifesto.append({"lote": i, "metricas": {
-            c: round(depois.get(c, 0) - antes.get(c, 0), 2)
-            for c in ("tentativas", "segundos", "input_tokens", "output_tokens")}})
+        delta = {c: round(depois.get(c, 0) - antes.get(c, 0), 2)
+                 for c in ("tentativas", "segundos") + CAMPOS_SOMADOS}
+        tools_antes = antes.get("tools_por_nome", {})
+        delta["tools_por_nome"] = {
+            n: q - tools_antes.get(n, 0)
+            for n, q in depois.get("tools_por_nome", {}).items() if q - tools_antes.get(n, 0)}
+        manifesto.append({"lote": i, "metricas": delta})
         _salvar_json(progresso, manifesto)
         # a cada lote, para acompanhar o gasto durante a execução
         _salvar_json(pasta / "metricas.json", metricas)
+        feitos_agora = i - inicio
+        if LOTES_POR_EXECUCAO and feitos_agora >= LOTES_POR_EXECUCAO and i < total:
+            raise PipelineError(
+                f"Etapa '{etapa}' parada após {feitos_agora} lote(s) "
+                f"(LOTES_POR_EXECUCAO={LOTES_POR_EXECUCAO}); lote {i}/{total} aprovado. "
+                "Uma nova execução retoma do próximo lote.")
     progresso.unlink(missing_ok=True)
     return manifesto
 
@@ -346,6 +357,50 @@ def planejar_modulo(
         metricas, max_tentativas, modulo=nome)
 
 
+def gravar_documentos(codigo_dir: Path, nome: str, agente,
+                      docs: Dict[str, tuple]) -> str:
+    """Grava no sandbox os documentos inteiros do módulo (especificação,
+    arquitetura, plano...) e devolve o bloco da mensagem que os aponta.
+
+    No sandbox, a mensagem de cada lote leva só o recorte do que o lote usa; o
+    agente lê o documento inteiro com read_file se faltar algo. Os arquivos
+    ficam em <código>/.mas/<módulo>/ e existem antes da foto de cada lote, então
+    a ColetaSandbox não os apaga. Sem sandbox, devolve "" (mensagem completa).
+    """
+    sandbox = getattr(agente, "sandbox", None)
+    if sandbox is None:
+        return ""
+    pasta = codigo_dir / ".mas" / layout.slugify(nome)
+    pasta.mkdir(parents=True, exist_ok=True)
+    caminhos = {}
+    for descricao, (arquivo, conteudo) in docs.items():
+        if conteudo:
+            (pasta / arquivo).write_text(conteudo, encoding="utf-8")
+            caminhos[descricao] = sandbox.caminho_no_container(pasta / arquivo)
+    return mensagens.documentos_do_modulo(caminhos)
+
+
+_VERIFICACAO_FINAL = {
+    "backend": "mvn -q test 2>&1 | tail -n 80",
+    "frontend": "npm run build 2>&1 | tail -n 60",
+}
+
+
+def verificacao_final(agente, raiz: Path, lado: str) -> Optional[dict]:
+    """Depois do último lote: a suíte inteira (backend) ou o build (frontend),
+    rodados pelo pipeline e não pelo agente. Registra o resultado; não interrompe."""
+    sandbox = getattr(agente, "sandbox", None)
+    if sandbox is None or not hasattr(sandbox, "execute"):
+        return None
+    comando = f"cd {sandbox.caminho_no_container(raiz)} && {_VERIFICACAO_FINAL[lado]}"
+    print(f"  [verificação final] {lado}: {_VERIFICACAO_FINAL[lado]}", flush=True)
+    r = sandbox.execute(comando, timeout=1800)
+    ok = getattr(r, "exit_code", 1) == 0
+    print(f"  [verificação final] {lado}: {'ok' if ok else 'FALHOU'}", flush=True)
+    return {"comando": comando, "exit_code": getattr(r, "exit_code", None),
+            "ok": ok, "saida": (getattr(r, "output", "") or "")[-4000:]}
+
+
 def implementar_backend(
     nome: str, contexto: ProjectContext, spec: FinalSpecification,
     modelo: ModuleDataModel, arq: ModuleArchitecture, plano: ImplementationPlan,
@@ -366,14 +421,24 @@ def implementar_backend(
     externas = interfaces_externas(raiz, arq, lay.backend_prefixos)
     api_base = api_da_base(raiz, plano_base, "backend")
     tabelas = {e.table for e in modelo.entities}
+    documentos = gravar_documentos(codigo_dir, nome, agente, {
+        "full final specification (JSON)": ("especificacao.json", spec.model_dump_json(indent=2)),
+        "full architecture (JSON)": ("arquitetura.json", arq.model_dump_json(indent=2)),
+        "full implementation plan of the module (JSON)": ("plano.json", plano.model_dump_json(indent=2)),
+        "migration (DDL)": ("migracao.sql", ddl),
+        "public signatures of all base backend files": ("api_base_backend.txt", api_base),
+    })
     manifesto += executar_lotes(
         "implementador_backend", agente, plano.backend_files, raiz,
         lambda lote, deps, i, n: mensagens.msg_implementador_backend(
             nome, spec, arq, plano, plano_base, ddl, externas, deps, lote, i, n,
-            api_base),
+            api_base, documentos),
         lambda: _conhecidos(raiz, [plano, plano_base], "backend", contexto,
                             tabelas=tabelas),
         pasta, metricas, max_tentativas, nome)
+    final = verificacao_final(agente, raiz, "backend")
+    if final:
+        manifesto.append({"verificacao_final": final})
     return manifesto
 
 
@@ -387,10 +452,20 @@ def implementar_frontend(
     endpoints = {validacao.normalizar_rota(e.path) for e in arq.endpoints}
     endpoints |= {validacao.normalizar_rota(e) for e in endpoints_externos}
     api_base = api_da_base(raiz, plano_base, "frontend")
-    return executar_lotes(
+    documentos = gravar_documentos(codigo_dir, nome, agente, {
+        "full requirements and specification (JSON)": ("especificacao.json", spec.model_dump_json(indent=2)),
+        "full architecture with all API endpoints (JSON)": ("arquitetura.json", arq.model_dump_json(indent=2)),
+        "full implementation plan with all screens (JSON)": ("plano.json", plano.model_dump_json(indent=2)),
+        "public signatures of all base frontend files": ("api_base_frontend.txt", api_base),
+    })
+    manifesto = executar_lotes(
         "implementador_frontend", agente, plano.frontend_files, raiz,
         lambda lote, deps, i, n: mensagens.msg_implementador_frontend(
-            nome, spec, arq, plano, plano_base, deps, lote, i, n, api_base),
+            nome, spec, arq, plano, plano_base, deps, lote, i, n, api_base, documentos),
         lambda: _conhecidos(raiz, [plano, plano_base], "frontend", contexto,
                             endpoints=endpoints),
         pasta, metricas, max_tentativas, nome)
+    final = verificacao_final(agente, raiz, "frontend")
+    if final:
+        manifesto.append({"verificacao_final": final})
+    return manifesto

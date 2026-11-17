@@ -98,7 +98,20 @@ class AgenteSandbox:
         self.ambiente = ambiente      # descrição dos serviços da rede (banco, cache)
 
     def invoke(self, entrada, config=None):
-        return self.grafo.invoke(entrada, config=config)
+        """Roda o grafo guardando o último estado: se o limite de passos estourar,
+        devolve as mensagens até ali (com `limite_passos`), para que os tokens
+        gastos entrem nas métricas e o que foi gravado seja colhido."""
+        from langgraph.errors import GraphRecursionError
+
+        if not hasattr(self.grafo, "stream"):        # grafos falsos dos testes
+            return self.grafo.invoke(entrada, config=config)
+        ultimo = {"messages": []}
+        try:
+            for estado in self.grafo.stream(entrada, config=config, stream_mode="values"):
+                ultimo = estado
+        except GraphRecursionError:
+            return {**ultimo, "limite_passos": True}
+        return ultimo
 
 
 def criar_agente_sandbox(regras: str, contexto: ProjectContext, sandbox,
